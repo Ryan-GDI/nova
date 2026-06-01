@@ -14,6 +14,42 @@ const API_KEY = process.env.ANTHROPIC_API_KEY;
 const MODEL = process.env.MAY_MODEL || "claude-sonnet-4-6";
 const MEMORY_MODEL = process.env.MAY_MEMORY_MODEL || MODEL; // model that maintains long-term memory
 
+// ---- Server-side memory storage ----
+// Durable when Upstash env vars are set; otherwise falls back to an in-process
+// cache (works, but resets when the free Render service sleeps or redeploys).
+const UPSTASH_URL = process.env.UPSTASH_REDIS_REST_URL;
+const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
+const MEM_KEY = process.env.NOVA_MEMORY_KEY || "nova_memory";
+let memCache = ""; // in-process fallback / cache
+
+async function upstash(command) {
+  // command is a Redis command as an array, e.g. ["GET","nova_memory"]
+  const r = await fetch(UPSTASH_URL, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${UPSTASH_TOKEN}`, "content-type": "application/json" },
+    body: JSON.stringify(command),
+  });
+  return r.json(); // { result: ... } or { error: ... }
+}
+
+async function loadMemory() {
+  if (UPSTASH_URL && UPSTASH_TOKEN) {
+    try {
+      const j = await upstash(["GET", MEM_KEY]);
+      memCache = typeof j?.result === "string" ? j.result : "";
+    } catch (_) { /* keep cache on error */ }
+  }
+  return memCache;
+}
+
+async function saveMemory(text) {
+  memCache = (text || "").toString();
+  if (UPSTASH_URL && UPSTASH_TOKEN) {
+    try { await upstash(["SET", MEM_KEY, memCache]); } catch (_) { /* keep cache */ }
+  }
+  return memCache;
+}
+
 // May's personality + skills live here on the server so they stay consistent.
 const PERSONA = `You are Nova, a warm, sharp, and concise assistant who speaks aloud and can also read documents, emails, images, and screenshots.
 
@@ -39,7 +75,7 @@ app.post("/api/ask", async (req, res) => {
       return res.status(400).json({ error: "No messages provided." });
     }
 
-    const memory = (req.body?.memory || "").toString().trim();
+    const memory = (await loadMemory()).trim();
     const system = memory
       ? PERSONA +
         "\n\nWHAT YOU REMEMBER ABOUT THIS USER (from past conversations — use it naturally, don't recite it back):\n" +
@@ -94,10 +130,23 @@ app.post("/api/extract", async (req, res) => {
   }
 });
 
+// Read / set / clear Nova's memory directly (used by the memory panel).
+app.get("/api/memory", async (_req, res) => {
+  res.json({ memory: await loadMemory(), durable: !!(UPSTASH_URL && UPSTASH_TOKEN) });
+});
+app.post("/api/memory", async (req, res) => {
+  const memory = await saveMemory((req.body?.memory || "").toString());
+  res.json({ memory });
+});
+app.post("/api/memory/clear", async (_req, res) => {
+  await saveMemory("");
+  res.json({ memory: "" });
+});
+
 // Maintain a concise long-term memory of durable facts about the user.
-// Called in the background after each exchange; the browser stores the result.
+// Called in the background after each exchange; stored on the server.
 app.post("/api/remember", async (req, res) => {
-  const current = (req.body?.memory || "").toString();
+  const current = await loadMemory();
   try {
     if (!API_KEY) return res.json({ memory: current });
     const exchange = (req.body?.exchange || "").toString().slice(0, 4000);
@@ -137,7 +186,8 @@ app.post("/api/remember", async (req, res) => {
       .map((b) => b.text)
       .join(" ")
       .trim();
-    res.json({ memory: updated || current });
+    const saved = await saveMemory(updated || current);
+    res.json({ memory: saved });
   } catch (e) {
     res.json({ memory: current });
   }
