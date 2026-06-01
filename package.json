@@ -1,0 +1,18 @@
+{
+  "name": "may-assistant",
+  "version": "2.0.0",
+  "description": "May — a voice-driven AI assistant that listens, reads documents/images, searches the web, summarises, and drafts replies.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "mammoth": "^1.8.0"
+  }
+}
