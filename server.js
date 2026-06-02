@@ -1,51 +1,123 @@
-# May — your voice assistant (v2)
+// Nova — backend server (documents, images, OCR, replies, server-side memory)
+import express from "express";
+import "dotenv/config";
+import mammoth from "mammoth";
 
-A voice-driven AI assistant that listens, **reads documents/emails/images**, does **OCR on photos and scans**, searches the web, **summarises**, and **drafts replies**.
-The browser handles voice and the camera; a small Node server holds your API key and talks to Anthropic.
+const app = express();
+app.use(express.json({ limit: "40mb" }));
+app.use(express.static("public"));
 
-```
-may-app/
-├─ server.js          ← backend: chat + Word-doc text extraction
-├─ package.json
-├─ .env.example       ← copy to .env and add your key
-└─ public/
-   └─ index.html      ← May's interface (voice, chat, upload, camera)
-```
+const API_KEY = process.env.ANTHROPIC_API_KEY;
+const MODEL = process.env.MAY_MODEL || "claude-sonnet-4-6";
+const MEMORY_MODEL = process.env.MAY_MEMORY_MODEL || MODEL;
 
-## What's new in v2
-- **Attach files** (paperclip) — images, PDFs, Word docs (.docx), and text files.
-- **Take a picture** (camera) — snap a document or screen and she reads it.
-- **OCR** — she reads text inside photos and scanned PDFs directly (powered by Claude's vision).
-- **Summarise / extract / suggest a reply** — quick-action buttons appear when you attach something.
-- **Drag & drop** files anywhere onto the page.
+const UPSTASH_URL = process.env.UPSTASH_REDIS_REST_URL;
+const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
+const MEM_KEY = process.env.NOVA_MEMORY_KEY || "nova_memory";
+let memCache = "";
 
-## Run her locally
-```bash
-cd may-app
-npm install            # now also installs "mammoth" for Word docs
-npm start
-```
-Open http://localhost:3000.
+async function upstash(command) {
+  const r = await fetch(UPSTASH_URL, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${UPSTASH_TOKEN}`, "content-type": "application/json" },
+    body: JSON.stringify(command),
+  });
+  return r.json();
+}
+async function loadMemory() {
+  if (UPSTASH_URL && UPSTASH_TOKEN) {
+    try { const j = await upstash(["GET", MEM_KEY]); memCache = typeof j?.result === "string" ? j.result : ""; } catch (_) {}
+  }
+  return memCache;
+}
+async function saveMemory(text) {
+  memCache = (text || "").toString();
+  if (UPSTASH_URL && UPSTASH_TOKEN) { try { await upstash(["SET", MEM_KEY, memCache]); } catch (_) {} }
+  return memCache;
+}
 
-> Upgrading from v1? Replace your old `server.js`, `package.json`, and `public/index.html`
-> with these, then run `npm install` again (for the new dependency) and `npm start`.
-> Your existing `.env` key keeps working.
+const PERSONA = `You are Nova, a warm, sharp, and concise assistant who speaks aloud and can also read documents, emails, images, and screenshots.
 
-## Notes & limits
-- PDFs: up to ~100 pages / ~32 MB per request (Anthropic limit). Big files cost more tokens.
-- Images are read by Claude's vision — great for photos of letters, receipts, screenshots, whiteboards.
-- The camera and microphone need **HTTPS** (or localhost), which you get automatically once hosted.
+VOICE: Your replies are read aloud, so keep them natural. For ordinary chat, 1-3 sentences, no markdown, no emoji, no bullet lists.
 
-## Hosting on your domain
-Same as before — deploy the folder to any Node host (Render, Railway, a VPS, or Axxess
-cloud/VPS or cPanel "Setup Node.js App"), set the `ANTHROPIC_API_KEY` environment variable,
-and point your domain at it. See the hosting steps you were given, or ask.
+WHEN THE USER ATTACHES A DOCUMENT, EMAIL, IMAGE, OR SCREENSHOT:
+- Summary requests: give the key points clearly and briefly.
+- Read / extract / OCR requests: report faithfully what the text says. You can read text inside photos and scanned documents directly.
+- Reply requests: draft a reply in a fitting tone. Begin with a short spoken lead-in, then give the full draft. If the tone or main points are unclear, ask one quick question first.
 
-## Make her yours
-- Personality & skills: edit `PERSONA` in `server.js`.
-- Model: set `MAY_MODEL` in `.env` (`claude-opus-4-8` = smartest; `claude-haiku-4-5` = cheapest).
-- Look: everything visual is in `public/index.html`.
+WEB: When a question needs current or factual info, use web search, then answer plainly in your own words.
 
-## Keep your key safe
-Your key lives only in `.env` / host environment variables — never in `public/`.
-Don't commit `.env`. For a public site, add rate limiting on `/api/ask` and `/api/extract`.
+LONG CONTENT: For something long like a full email draft, keep any preamble short and put the substance in the body for the user to read on screen.`;
+
+app.post("/api/ask", async (req, res) => {
+  try {
+    if (!API_KEY) return res.status(500).json({ error: "Server is missing ANTHROPIC_API_KEY." });
+    const messages = Array.isArray(req.body?.messages) ? req.body.messages.slice(-16) : null;
+    if (!messages || !messages.length) return res.status(400).json({ error: "No messages provided." });
+
+    const memory = (await loadMemory()).trim();
+    const system = memory
+      ? PERSONA + "\n\nWHAT YOU REMEMBER ABOUT THIS USER (use it naturally, don't recite it back):\n" + memory
+      : PERSONA;
+
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": API_KEY, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({
+        model: MODEL, max_tokens: 1500, system, messages,
+        tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 5 }],
+      }),
+    });
+    const data = await r.json();
+    if (data.error) return res.status(502).json({ error: data.error.message || "Anthropic API error." });
+    const reply = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join(" ").trim();
+    res.json({ reply: reply || "Sorry, I didn't catch that — could you say it again?" });
+  } catch (e) { console.error(e); res.status(500).json({ error: "Server error reaching the assistant." }); }
+});
+
+app.post("/api/extract", async (req, res) => {
+  try {
+    const { dataBase64, name } = req.body || {};
+    if (!dataBase64) return res.status(400).json({ error: "No file data." });
+    const buffer = Buffer.from(dataBase64, "base64");
+    const result = await mammoth.extractRawText({ buffer });
+    res.json({ text: (result.value || "").trim(), name: name || "document.docx" });
+  } catch (e) { console.error(e); res.status(500).json({ error: "Couldn't read that Word document." }); }
+});
+
+app.get("/api/memory", async (_req, res) => {
+  res.json({ memory: await loadMemory(), durable: !!(UPSTASH_URL && UPSTASH_TOKEN) });
+});
+app.post("/api/memory", async (req, res) => {
+  const memory = await saveMemory((req.body?.memory || "").toString());
+  res.json({ memory });
+});
+app.post("/api/memory/clear", async (_req, res) => {
+  await saveMemory(""); res.json({ memory: "" });
+});
+
+app.post("/api/remember", async (req, res) => {
+  const current = await loadMemory();
+  try {
+    if (!API_KEY) return res.json({ memory: current });
+    const exchange = (req.body?.exchange || "").toString().slice(0, 4000);
+    if (!exchange.trim()) return res.json({ memory: current });
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": API_KEY, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({
+        model: MEMORY_MODEL, max_tokens: 400,
+        system: "You maintain a short memory of durable facts about a user, for an assistant named Nova. Given the CURRENT MEMORY and a NEW EXCHANGE, return an updated memory: a concise list of stable, useful facts worth remembering long-term (name, location, job, key preferences, ongoing projects). Keep existing facts, add new ones, correct outdated ones. Ignore one-off questions and small talk. Keep it under 150 words. Output ONLY the memory text, with no preamble or commentary.",
+        messages: [{ role: "user", content: "CURRENT MEMORY:\n" + (current.trim() || "(empty)") + "\n\nNEW EXCHANGE:\n" + exchange + "\n\nUpdated memory:" }],
+      }),
+    });
+    const data = await r.json();
+    if (data.error) return res.json({ memory: current });
+    const updated = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join(" ").trim();
+    const saved = await saveMemory(updated || current);
+    res.json({ memory: saved });
+  } catch (e) { res.json({ memory: current }); }
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Nova is listening on http://localhost:${PORT}`));
