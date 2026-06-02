@@ -210,7 +210,7 @@
 <div class="cam" id="memModal">
   <div class="cam-card mem-card">
     <div class="mem-h">What Nova remembers</div>
-    <div class="mem-sub">Saved on this device so Nova can recall you between chats. Edit it or clear it anytime — you're in control.</div>
+    <div class="mem-sub">Nova remembers this across all your devices. Edit it or clear it anytime — you're in control.</div>
     <textarea id="memText" placeholder="Nova hasn't noted anything durable yet. Tell her your name, where you are, or what you're working on, and it'll show up here."></textarea>
     <div class="mem-row">
       <button class="mem-save" id="memSave">Save</button>
@@ -233,10 +233,9 @@
   let attachments = [];    // pending files for the next message
   let busy = false, uid = 0;
 
-  // ---- persistence & long-term memory (saved on this device) ----
-  const LS_HIST='nova_history', LS_MEM='nova_memory';
-  let memory = '';
-  try { memory = localStorage.getItem(LS_MEM) || ''; } catch(_){}
+  // ---- conversation persistence (per-device) + server-side memory ----
+  const LS_HIST='nova_history';
+  let memory = '';  // mirror of Nova's server-side memory, for the panel display
 
   function textOf(content){
     if (typeof content==='string') return content;
@@ -254,8 +253,12 @@
     });
   }
   function save(){
-    try{ localStorage.setItem(LS_HIST, JSON.stringify(slimForStorage())); localStorage.setItem(LS_MEM, memory); }catch(_){}
+    try{ localStorage.setItem(LS_HIST, JSON.stringify(slimForStorage())); }catch(_){}
   }
+  // pull Nova's memory from the server on load (shared across all devices)
+  (async function loadServerMemory(){
+    try{ const r=await fetch('/api/memory'); const j=await r.json(); if(typeof j.memory==='string') memory=j.memory; }catch(_){}
+  })();
 
   function setState(s){ stage.className='stage'+(s?' state-'+s:''); const l={listening:'listening…',reading:'reading…',thinking:'thinking…',speaking:'speaking…'}; status.textContent=l[s]||'tap the mic & talk'; }
 
@@ -298,10 +301,10 @@
     pending.querySelectorAll('.x').forEach(b=> b.onclick=()=>{ attachments=attachments.filter(a=>a.id!=b.dataset.id); renderPending(); });
   }
 
-  // build Anthropic content blocks from pending attachments
-  async function buildBlocks(){
+  // build Anthropic content blocks from the given attachment list
+  async function buildBlocks(list){
     const blocks=[];
-    for (const att of attachments){
+    for (const att of list){
       if (att.kind==='image'){
         const d = att.thumb || await readDataURL(att.file);
         blocks.push({ type:'image', source:{ type:'base64', media_type:imgType(att.file.type), data:strip(d) } });
@@ -358,7 +361,7 @@
     let userMsg;
     if (hasAtt){
       setState('reading');
-      try { const blocks = await buildBlocks(); userMsg = { role:'user', content:[...blocks, { type:'text', text }] }; }
+      try { const blocks = await buildBlocks(sending); userMsg = { role:'user', content:[...blocks, { type:'text', text }] }; }
       catch(e){ userMsg = { role:'user', content:text }; }
     } else {
       userMsg = { role:'user', content:text };
@@ -367,7 +370,7 @@
 
     const thinkEl=thinking(); setState('thinking');
     try{
-      const res=await fetch('/api/ask',{ method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({messages:history, memory}) });
+      const res=await fetch('/api/ask',{ method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({messages:history}) });
       const data=await res.json();
       const reply=(data.reply||data.error||"Sorry, I didn't catch that.").trim();
       thinkEl.remove(); addMay(reply); history.push({role:'assistant',content:reply}); save(); speak(reply);
@@ -431,23 +434,35 @@
     note.innerHTML="Voice input isn't supported in this browser — <b>type to me</b> instead. (Chrome works best.)";
     micBtn.addEventListener('click',()=>input.focus());
   }
-  // ---- long-term memory update (runs quietly in the background) ----
+  // ---- long-term memory update (runs quietly in the background, stored on the server) ----
   async function updateMemory(userText, reply){
     try{
       const exchange = 'User: '+userText+'\nNova: '+reply;
-      const r = await fetch('/api/remember',{ method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ memory, exchange }) });
+      const r = await fetch('/api/remember',{ method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ exchange }) });
       const j = await r.json();
-      if (j && typeof j.memory==='string'){ memory = j.memory; save(); }
+      if (j && typeof j.memory==='string'){ memory = j.memory; }
     }catch(_){}
   }
 
-  // ---- memory panel ----
+  // ---- memory panel (reads/writes Nova's server-side memory) ----
   const memModal=$('memModal'), memText=$('memText'), memoryBtn=$('memoryBtn');
-  memoryBtn.addEventListener('click',()=>{ memText.value=memory; memModal.classList.add('open'); });
+  memoryBtn.addEventListener('click',async ()=>{
+    memText.value='Loading…'; memModal.classList.add('open');
+    try{ const r=await fetch('/api/memory'); const j=await r.json(); memory=(typeof j.memory==='string')?j.memory:''; }catch(_){}
+    memText.value=memory;
+  });
   $('memClose').addEventListener('click',()=>memModal.classList.remove('open'));
-  $('memSave').addEventListener('click',()=>{ memory=memText.value.trim(); save(); memModal.classList.remove('open'); });
-  $('memClear').addEventListener('click',()=>{ if(confirm('Clear everything Nova remembers about you?')){ memory=''; memText.value=''; save(); } });
-  $('memChat').addEventListener('click',()=>{ if(confirm('Clear the current conversation? Your memory notes are kept.')){ try{localStorage.removeItem(LS_HIST);}catch(_){} location.reload(); } });
+  $('memSave').addEventListener('click',async ()=>{
+    const val=memText.value.trim();
+    try{ const r=await fetch('/api/memory',{ method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ memory:val }) }); const j=await r.json(); memory=(typeof j.memory==='string')?j.memory:val; }catch(_){ memory=val; }
+    memModal.classList.remove('open');
+  });
+  $('memClear').addEventListener('click',async ()=>{
+    if(!confirm('Clear everything Nova remembers about you? This affects all your devices.')) return;
+    try{ await fetch('/api/memory/clear',{ method:'POST' }); }catch(_){}
+    memory=''; memText.value='';
+  });
+  $('memChat').addEventListener('click',()=>{ if(confirm('Clear the current conversation on this device? Nova\'s memory is kept.')){ try{localStorage.removeItem(LS_HIST);}catch(_){} location.reload(); } });
 
   // ---- restore the previous conversation on load ----
   (function restore(){
