@@ -1,14 +1,18 @@
-# Copy this file to ".env" and paste in your real key.
-# Get a key at https://console.anthropic.com  (Settings -> API Keys)
-
-ANTHROPIC_API_KEY=sk-ant-your-key-here
-
-# Optional - change the model Nova uses.
-# Faster/cheaper: claude-haiku-4-5   |   Smarter: claude-opus-4-8
-MAY_MODEL=claude-sonnet-4-6
-
-# Optional - durable cross-device memory (free at https://console.upstash.com).
-# Create a Redis database, then copy its REST URL and REST token here.
-# Without these, memory still works but resets when the free server sleeps/redeploys.
-UPSTASH_REDIS_REST_URL=
-UPSTASH_REDIS_REST_TOKEN=
+{
+  "name": "may-assistant",
+  "version": "2.0.0",
+  "description": "Nova — a voice-driven AI assistant that listens, reads documents/images, searches the web, summarises, and drafts replies.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "mammoth": "^1.8.0"
+  }
+}
