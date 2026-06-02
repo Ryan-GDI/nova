@@ -132,6 +132,10 @@
   .memorybtn{ margin-left:auto; display:flex; align-items:center; gap:6px; background:#fff; border:1px solid var(--line); color:var(--dim); border-radius:18px; padding:6px 12px; cursor:pointer; font-family:"Space Mono",monospace; font-size:10px; letter-spacing:1px; text-transform:uppercase; transition:color .2s,border-color .2s; }
   .memorybtn:hover{ color:var(--cool); border-color:rgba(30,58,107,.4); }
   .memorybtn svg{ width:14px; height:14px; }
+  .wakebtn{ margin-left:auto; }
+  #memoryBtn{ margin-left:8px; }
+  .wakebtn.on{ background:var(--mint); border-color:var(--mint); color:#fff; }
+  .wakebtn.on svg{ animation:think 2.4s linear infinite; }
   .mem-card .mem-h{ font-family:"Fraunces",serif; font-size:21px; margin-bottom:4px; color:var(--text); }
   .mem-card .mem-sub{ color:var(--dim); font-size:12.5px; line-height:1.5; margin-bottom:12px; }
   .mem-card textarea{ width:100%; min-height:170px; resize:vertical; background:var(--void); color:var(--text); border:1px solid var(--line); border-radius:12px; padding:12px; font-family:"DM Sans",sans-serif; font-size:14px; line-height:1.55; outline:none; }
@@ -150,6 +154,10 @@
 <div class="app">
   <header>
     <div class="wordmark">Nova</div><div class="tag">reads · listens · replies</div>
+    <button class="memorybtn wakebtn" id="wakeBtn" title="Hands-free: say 'Hi Nova'">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9"/><path d="M3 12a9 9 0 0 0 9 9"/><circle cx="12" cy="12" r="3"/></svg>
+      <span>hands-free</span>
+    </button>
     <button class="memorybtn" id="memoryBtn" title="What Nova remembers">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44A2.5 2.5 0 0 1 4 17.5 2.5 2.5 0 0 1 2.5 13 2.5 2.5 0 0 1 4 8.5 2.5 2.5 0 0 1 6.04 4.5 2.5 2.5 0 0 1 9.5 2z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44A2.5 2.5 0 0 0 20 17.5 2.5 2.5 0 0 0 21.5 13 2.5 2.5 0 0 0 20 8.5 2.5 2.5 0 0 0 17.96 4.5 2.5 2.5 0 0 0 14.5 2z"/></svg>
       <span>memory</span>
@@ -345,7 +353,7 @@
   function pickVoice(){ const vs=speechSynthesis.getVoices(); if(!vs.length)return; const pref=['Samantha','Google UK English Female','Microsoft Aria','Microsoft Zira','Google US English']; voice=vs.find(v=>pref.includes(v.name))||vs.find(v=>/female/i.test(v.name))||vs.find(v=>/en[-_]/i.test(v.lang))||vs[0]; }
   if('speechSynthesis' in window){ pickVoice(); speechSynthesis.onvoiceschanged=pickVoice; }
   function speakable(t){ if(t.length<=700) return t; const cut=t.slice(0,640); const m=cut.match(/[\s\S]*[.!?](\s|$)/); return (m?m[0]:cut).trim()+' I\'ve put the full text on screen for you.'; }
-  function speak(text){ if(!('speechSynthesis' in window)){ setState(null); return; } speechSynthesis.cancel(); const u=new SpeechSynthesisUtterance(speakable(text)); if(voice)u.voice=voice; u.rate=1.02; u.pitch=1.05; u.onstart=()=>setState('speaking'); u.onend=()=>setState(null); speechSynthesis.speak(u); }
+  function speak(text){ if(!('speechSynthesis' in window)){ setState(null); return; } speechSynthesis.cancel(); const u=new SpeechSynthesisUtterance(speakable(text)); if(voice)u.voice=voice; u.rate=1.02; u.pitch=1.05; u.onstart=()=>setState('speaking'); u.onend=()=>{ setState(null); if(wakeOn && !busy && !listening) setTimeout(startWake,200); }; speechSynthesis.speak(u); }
 
   // ---- ask ----
   async function ask(userText){
@@ -423,16 +431,59 @@
   // ---- voice in ----
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
   let recog=null, listening=false;
+  // wake-word state
+  let wakeOn=false, wakeRecog=null, wakeActive=false;
+  const wakeBtn=$('wakeBtn');
+  const WAKE_RE=/\b(hi|hey|hello|ok|okay)\s+nova\b/i;
+
+  function startWake(){
+    if(!wakeOn || !wakeRecog || wakeActive || busy) return;
+    try{ wakeRecog.start(); }catch(_){}
+  }
+  function captureCommand(){
+    if(!recog) return;
+    setState('listening');
+    try{ recog.start(); }catch(_){}
+  }
+
   if(SR){
     recog=new SR(); recog.lang='en-US'; recog.interimResults=true; recog.continuous=false;
     recog.onstart=()=>{ listening=true; micBtn.classList.add('live'); setState('listening'); };
     recog.onerror=(e)=>{ listening=false; micBtn.classList.remove('live'); setState(null); if(e.error==='not-allowed'||e.error==='service-not-allowed'){ note.innerHTML="I couldn't get mic access. You can still <b>type to me</b> below."; } };
-    recog.onend=()=>{ listening=false; micBtn.classList.remove('live'); if(!busy)setState(null); };
-    recog.onresult=(e)=>{ let final=''; for(let i=e.resultIndex;i<e.results.length;i++){ if(e.results[i].isFinal)final+=e.results[i][0].transcript; } if(final.trim())ask(final.trim()); };
+    recog.onend=()=>{ listening=false; micBtn.classList.remove('live'); if(!busy)setState(null); if(wakeOn && !busy) startWake(); };
+    recog.onresult=(e)=>{ let final=''; for(let i=e.resultIndex;i<e.results.length;i++){ if(e.results[i].isFinal)final+=e.results[i][0].transcript; } if(final.trim()){ ask(final.trim()); } };
     micBtn.addEventListener('click',()=>{ if(busy)return; if('speechSynthesis' in window)speechSynthesis.cancel(); if(listening){ recog.stop(); return; } try{ recog.start(); }catch(_){} });
+
+    // background wake-word listener (separate continuous recogniser)
+    wakeRecog=new SR(); wakeRecog.lang='en-US'; wakeRecog.interimResults=true; wakeRecog.continuous=true;
+    wakeRecog.onstart=()=>{ wakeActive=true; };
+    wakeRecog.onend=()=>{ wakeActive=false; if(wakeOn && !busy && !listening) setTimeout(startWake,300); };
+    wakeRecog.onerror=(e)=>{ wakeActive=false; if(e.error==='not-allowed'||e.error==='service-not-allowed'){ wakeOn=false; wakeBtn.classList.remove('on'); note.innerHTML="I need mic access for hands-free mode."; } };
+    wakeRecog.onresult=(e)=>{
+      let txt=''; for(let i=0;i<e.results.length;i++){ txt+=e.results[i][0].transcript+' '; }
+      const m=txt.match(WAKE_RE);
+      if(m){
+        const after=txt.slice(txt.toLowerCase().indexOf(m[0].toLowerCase())+m[0].length).trim();
+        try{ wakeRecog.stop(); }catch(_){}
+        if('speechSynthesis' in window) speechSynthesis.cancel();
+        if(after && after.replace(/[^a-z0-9]/gi,'').length>1){
+          ask(after);            // they said the whole request in one breath
+        } else {
+          captureCommand();      // they only said "Hi Nova" — listen for the question
+        }
+      }
+    };
+
+    wakeBtn.addEventListener('click',()=>{
+      wakeOn=!wakeOn;
+      wakeBtn.classList.toggle('on',wakeOn);
+      if(wakeOn){ note.innerHTML="Hands-free is on — just say <b>“Hi Nova”</b>, then your question."; startWake(); }
+      else { note.textContent=''; try{ wakeRecog.stop(); }catch(_){} }
+    });
   } else {
     note.innerHTML="Voice input isn't supported in this browser — <b>type to me</b> instead. (Chrome works best.)";
     micBtn.addEventListener('click',()=>input.focus());
+    wakeBtn.style.display='none';
   }
   // ---- long-term memory update (runs quietly in the background, stored on the server) ----
   async function updateMemory(userText, reply){
