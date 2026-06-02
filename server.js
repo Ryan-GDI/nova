@@ -1,7 +1,6 @@
 // Nova — backend server (documents, images, OCR, replies, server-side memory)
 import express from "express";
 import "dotenv/config";
-import mammoth from "mammoth";
 
 const app = express();
 app.use(express.json({ limit: "40mb" }));
@@ -75,14 +74,8 @@ app.post("/api/ask", async (req, res) => {
   } catch (e) { console.error(e); res.status(500).json({ error: "Server error reaching the assistant." }); }
 });
 
-app.post("/api/extract", async (req, res) => {
-  try {
-    const { dataBase64, name } = req.body || {};
-    if (!dataBase64) return res.status(400).json({ error: "No file data." });
-    const buffer = Buffer.from(dataBase64, "base64");
-    const result = await mammoth.extractRawText({ buffer });
-    res.json({ text: (result.value || "").trim(), name: name || "document.docx" });
-  } catch (e) { console.error(e); res.status(500).json({ error: "Couldn't read that Word document." }); }
+app.post("/api/extract", async (_req, res) => {
+  res.json({ text: "(Word .docx reading is temporarily unavailable — please paste the text, or send a PDF or photo instead.)" });
 });
 
 app.get("/api/memory", async (_req, res) => {
