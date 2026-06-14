@@ -4,6 +4,7 @@
 
 import express from "express";
 import "dotenv/config";
+import crypto from "crypto";
 import { unzipSync, strFromU8 } from "fflate";
 
 const app = express();
@@ -30,6 +31,38 @@ function extractDocxText(buffer) {
 const API_KEY = process.env.ANTHROPIC_API_KEY;
 const MODEL = process.env.MAY_MODEL || "claude-sonnet-4-6";
 const MEMORY_MODEL = process.env.MAY_MEMORY_MODEL || MODEL; // model that maintains long-term memory
+
+// ---- Passcode lock ----
+// Set NOVA_PASSCODE in the environment to require a passcode. If it's unset,
+// Nova stays open (so you can't accidentally lock yourself out before setting it).
+const PASSCODE = (process.env.NOVA_PASSCODE || "").toString();
+const SESSION_TOKEN = PASSCODE
+  ? crypto.createHash("sha256").update(PASSCODE + ":nova-session-v1").digest("hex")
+  : "";
+
+function safeEqual(a, b) {
+  const x = Buffer.from(String(a)), y = Buffer.from(String(b));
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+}
+function authed(req) {
+  if (!PASSCODE) return true; // no passcode configured => open
+  return safeEqual(req.headers["x-nova-auth"] || "", SESSION_TOKEN);
+}
+function guard(req, res, next) {
+  if (authed(req)) return next();
+  res.status(401).json({ error: "Locked — enter the passcode." });
+}
+
+// Does this Nova require a passcode? (so the page knows whether to show the lock)
+app.get("/api/authmode", (_req, res) => res.json({ required: !!PASSCODE }));
+
+// Exchange the passcode for a session token the browser stores.
+app.post("/api/login", (req, res) => {
+  if (!PASSCODE) return res.json({ ok: true, token: "" });
+  const given = (req.body?.passcode || "").toString();
+  if (!safeEqual(given, PASSCODE)) return res.status(401).json({ ok: false });
+  res.json({ ok: true, token: SESSION_TOKEN });
+});
 
 // ---- Server-side memory storage ----
 // Durable when Upstash env vars are set; otherwise falls back to an in-process
@@ -82,7 +115,7 @@ WEB: When a question needs current or factual info, use web search, then answer 
 LONG CONTENT: For something long like a full email draft, keep any preamble short (it gets read aloud) and put the substance in the body for the user to read on screen.`;
 
 // Main conversation endpoint — accepts full message history (text + image/document/text blocks).
-app.post("/api/ask", async (req, res) => {
+app.post("/api/ask", guard, async (req, res) => {
   try {
     if (!API_KEY) {
       return res.status(500).json({ error: "Server is missing ANTHROPIC_API_KEY." });
@@ -134,7 +167,7 @@ app.post("/api/ask", async (req, res) => {
 
 // Extract plain text from an uploaded .docx so Nova can read Word documents.
 // (Images and PDFs go straight to Claude as image/document blocks — no extraction needed.)
-app.post("/api/extract", async (req, res) => {
+app.post("/api/extract", guard, async (req, res) => {
   try {
     const { dataBase64, name } = req.body || {};
     if (!dataBase64) return res.status(400).json({ error: "No file data." });
@@ -148,21 +181,21 @@ app.post("/api/extract", async (req, res) => {
 });
 
 // Read / set / clear Nova's memory directly (used by the memory panel).
-app.get("/api/memory", async (_req, res) => {
+app.get("/api/memory", guard, async (_req, res) => {
   res.json({ memory: await loadMemory(), durable: !!(UPSTASH_URL && UPSTASH_TOKEN) });
 });
-app.post("/api/memory", async (req, res) => {
+app.post("/api/memory", guard, async (req, res) => {
   const memory = await saveMemory((req.body?.memory || "").toString());
   res.json({ memory });
 });
-app.post("/api/memory/clear", async (_req, res) => {
+app.post("/api/memory/clear", guard, async (_req, res) => {
   await saveMemory("");
   res.json({ memory: "" });
 });
 
 // Maintain a concise long-term memory of durable facts about the user.
 // Called in the background after each exchange; stored on the server.
-app.post("/api/remember", async (req, res) => {
+app.post("/api/remember", guard, async (req, res) => {
   const current = await loadMemory();
   try {
     if (!API_KEY) return res.json({ memory: current });
