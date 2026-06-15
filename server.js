@@ -206,6 +206,64 @@ function withStatus(t) {
   return { ...t, done };
 }
 
+// Tools Nova can call to manage the checklist by voice/chat.
+const TASK_TOOLS = [
+  {
+    name: "add_task",
+    description: "Add a task to the user's daily checklist. Use whenever the user asks to add, note, remember, or put something on their checklist or to-do list. For things they do every day, set daily=true so it resets each morning.",
+    input_schema: { type: "object", properties: {
+      text: { type: "string", description: "The task text" },
+      daily: { type: "boolean", description: "True if it repeats every day" }
+    }, required: ["text"] },
+  },
+  {
+    name: "complete_task",
+    description: "Mark a task on the checklist as done. Match by the words the user uses.",
+    input_schema: { type: "object", properties: { text: { type: "string", description: "Text (or part) of the task to mark done" } }, required: ["text"] },
+  },
+  {
+    name: "remove_task",
+    description: "Delete a task from the checklist. Match by the words the user uses.",
+    input_schema: { type: "object", properties: { text: { type: "string", description: "Text (or part) of the task to delete" } }, required: ["text"] },
+  },
+];
+function findTask(list, q) {
+  const s = (q || "").toLowerCase().trim();
+  return list.find(t => t.text.toLowerCase() === s)
+    || list.find(t => t.text.toLowerCase().includes(s))
+    || list.find(t => s.includes(t.text.toLowerCase()));
+}
+async function toolAddTask(input) {
+  const text = (input?.text || "").toString().trim();
+  if (!text) return "No task text given.";
+  const list = await loadTasks();
+  list.push({ id: "t" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), text, daily: !!input?.daily, doneDate: null });
+  await saveTasks(list);
+  return `Added "${text}"${input?.daily ? " as a daily task" : ""} to the checklist.`;
+}
+async function toolCompleteTask(input) {
+  const list = await loadTasks();
+  const t = findTask(list, input?.text);
+  if (!t) return `No task matching "${input?.text}" was found.`;
+  t.doneDate = todayStr();
+  await saveTasks(list);
+  return `Marked "${t.text}" as done.`;
+}
+async function toolRemoveTask(input) {
+  let list = await loadTasks();
+  const t = findTask(list, input?.text);
+  if (!t) return `No task matching "${input?.text}" was found.`;
+  list = list.filter(x => x.id !== t.id);
+  await saveTasks(list);
+  return `Removed "${t.text}" from the checklist.`;
+}
+async function runTaskTool(name, input) {
+  if (name === "add_task") return toolAddTask(input);
+  if (name === "complete_task") return toolCompleteTask(input);
+  if (name === "remove_task") return toolRemoveTask(input);
+  return null;
+}
+
 // May's personality + skills live here on the server so they stay consistent.
 const PERSONA = `You are Nova, a warm, sharp, and concise assistant who speaks aloud and can also read documents, emails, images, and screenshots.
 
@@ -220,7 +278,7 @@ WEB: When a question needs current or factual info, use web search, then answer 
 
 LONG CONTENT: For something long like a full email draft, keep any preamble short (it gets read aloud) and put the substance in the body for the user to read on screen.
 
-DAILY CHECKLIST: The user has a real, saved checklist built into the app — they open it with the "Tasks" button (the checklist icon in the header). You can SEE today's checklist below when it exists, so if they ask what's due, outstanding, or left to do, just tell them naturally from that list. Do NOT write out checklists, to-do lists, or HTML/code for tasks in chat — instead, point them to the Tasks button to add items (e.g. "Tap the Tasks button to add that — then I'll track it for you"). Only discuss the checklist conversationally; never paste markup.`;
+DAILY CHECKLIST: The user has a real, saved checklist built into the app (the "Tasks" button). You can SEE today's checklist below when it exists, and you can MANAGE it with your tools: use add_task when they ask to add/note/remember a task (set daily=true for things they do every day), complete_task when they say something's done, and remove_task to delete one. After using a tool, confirm briefly and naturally in one sentence (e.g. "Added that to your checklist"). If they ask what's due, just tell them from the list below. Never write out checklists or HTML/code for tasks in chat.`;
 
 // Main conversation endpoint — accepts full message history (text + image/document/text blocks).
 app.post("/api/ask", guard, async (req, res) => {
@@ -252,33 +310,48 @@ app.post("/api/ask", guard, async (req, res) => {
       }
     } catch (_) {}
 
-    const r = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": API_KEY,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        max_tokens: 1500,
-        system,
-        messages,
-        tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 5 }],
-      }),
-    });
+    const tools = [
+      { type: "web_search_20250305", name: "web_search", max_uses: 5 },
+      ...TASK_TOOLS,
+    ];
 
-    const data = await r.json();
-    if (data.error) {
-      return res.status(502).json({ error: data.error.message || "Anthropic API error." });
+    let convo = messages.slice();
+    let reply = "";
+    let tasksChanged = false;
+
+    for (let step = 0; step < 5; step++) {
+      const r = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-api-key": API_KEY,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({ model: MODEL, max_tokens: 1500, system, messages: convo, tools }),
+      });
+      const data = await r.json();
+      if (data.error) {
+        return res.status(502).json({ error: data.error.message || "Anthropic API error." });
+      }
+      const textPart = (data.content || []).filter(b => b.type === "text").map(b => b.text).join(" ").trim();
+
+      if (data.stop_reason === "tool_use") {
+        const results = [];
+        for (const b of (data.content || [])) {
+          if (b.type !== "tool_use") continue;
+          const out = await runTaskTool(b.name, b.input); // null for non-task (server) tools
+          if (out != null) { tasksChanged = true; results.push({ type: "tool_result", tool_use_id: b.id, content: out }); }
+        }
+        if (!results.length) { reply = textPart; break; } // nothing for us to run
+        convo.push({ role: "assistant", content: data.content });
+        convo.push({ role: "user", content: results });
+        continue; // loop for Nova's spoken confirmation
+      }
+      reply = textPart;
+      break;
     }
-    const reply = (data.content || [])
-      .filter((b) => b.type === "text")
-      .map((b) => b.text)
-      .join(" ")
-      .trim();
 
-    res.json({ reply: reply || "Sorry, I didn't catch that — could you say it again?" });
+    res.json({ reply: reply || "Done.", tasksChanged });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: "Server error reaching the assistant." });
