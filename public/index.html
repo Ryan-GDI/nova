@@ -139,8 +139,15 @@
   .memorybtn{ margin-left:auto; display:flex; align-items:center; gap:6px; background:#fff; border:1px solid var(--line); color:var(--dim); border-radius:18px; padding:6px 12px; cursor:pointer; font-family:"Space Mono",monospace; font-size:10px; letter-spacing:1px; text-transform:uppercase; transition:color .2s,border-color .2s; }
   .memorybtn:hover{ color:var(--cool); border-color:rgba(30,58,107,.4); }
   .memorybtn svg{ width:14px; height:14px; }
-  .wakebtn{ margin-left:auto; }
+  .wakebtn{ margin-left:8px; }
   #memoryBtn{ margin-left:8px; }
+  .taskbtn{ margin-left:auto; }
+  .badge{ background:var(--gold,#c8881d); color:#fff; border-radius:10px; font-size:9px; padding:1px 6px; margin-left:2px; letter-spacing:0; }
+  @media (max-width:560px){
+    .memorybtn span:not(.badge){ display:none; }
+    .memorybtn{ padding:7px 9px; }
+    .tag{ display:none; }
+  }
   .wakebtn.on{ background:var(--mint); border-color:var(--mint); color:#fff; }
   .wakebtn.on svg{ animation:think 2.4s linear infinite; }
   .mem-card .mem-h{ font-family:"Fraunces",serif; font-size:21px; margin-bottom:4px; color:var(--text); }
@@ -153,6 +160,27 @@
   .mem-clear{ background:rgba(200,136,29,.12); color:var(--warm-deep); border:1px solid rgba(200,136,29,.35)!important; }
   .mem-chat{ background:rgba(20,40,80,.06); color:var(--text); }
   .mem-close{ background:transparent!important; color:var(--dim); margin-left:auto; }
+  /* tasks panel */
+  .task-card{ max-width:520px; }
+  .task-add{ display:flex; gap:8px; align-items:center; margin-bottom:14px; flex-wrap:wrap; }
+  .task-add input[type=text]{ flex:1; min-width:160px; padding:11px 13px; border:1px solid var(--line); border-radius:12px; font-family:"DM Sans",sans-serif; font-size:14px; color:var(--text); outline:none; background:#fff; }
+  .task-add input[type=text]:focus{ border-color:rgba(30,58,107,.5); }
+  .task-daily{ display:flex; align-items:center; gap:5px; font-family:"Space Mono",monospace; font-size:10px; text-transform:uppercase; letter-spacing:1px; color:var(--dim); cursor:pointer; }
+  .task-addbtn{ padding:10px 16px; border:none; border-radius:12px; background:var(--cool); color:#fff; font-family:"DM Sans",sans-serif; font-size:14px; font-weight:600; cursor:pointer; }
+  .task-addbtn:hover{ background:#2f5596; }
+  .task-list{ max-height:46vh; overflow-y:auto; }
+  .task-item{ display:flex; align-items:center; gap:11px; padding:11px 4px; border-bottom:1px solid var(--line); }
+  .task-item:last-child{ border-bottom:none; }
+  .task-check{ width:21px; height:21px; flex:none; border:2px solid rgba(30,58,107,.4); border-radius:6px; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+  .task-check.on{ background:var(--cool); border-color:var(--cool); }
+  .task-check svg{ width:13px; height:13px; color:#fff; display:none; }
+  .task-check.on svg{ display:block; }
+  .task-text{ flex:1; font-family:"DM Sans",sans-serif; font-size:14.5px; color:var(--text); }
+  .task-item.done .task-text{ color:var(--dim); text-decoration:line-through; }
+  .task-tag{ font-family:"Space Mono",monospace; font-size:8.5px; text-transform:uppercase; letter-spacing:1px; color:var(--warm-deep); background:rgba(200,136,29,.12); padding:2px 6px; border-radius:8px; }
+  .task-del{ background:transparent; border:none; color:var(--dim); cursor:pointer; font-size:18px; line-height:1; padding:2px 6px; }
+  .task-del:hover{ color:var(--warm-deep); }
+  .task-empty{ text-align:center; color:var(--dim); font-family:"Fraunces",serif; font-style:italic; padding:24px 0; }
 
   /* lock screen */
   .lock{ position:fixed; inset:0; z-index:50; background:var(--void); display:none; align-items:center; justify-content:center; padding:24px; }
@@ -180,6 +208,10 @@
 <div class="app">
   <header>
     <div class="wordmark">Nova</div><div class="tag">reads · listens · replies</div>
+    <button class="memorybtn taskbtn" id="taskBtn" title="Daily checklist">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+      <span>tasks</span><span class="badge" id="taskBadge" style="display:none">0</span>
+    </button>
     <button class="memorybtn wakebtn" id="wakeBtn" title="Hands-free: say 'Hi Nova'">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9"/><path d="M3 12a9 9 0 0 0 9 9"/><circle cx="12" cy="12" r="3"/></svg>
       <span>hands-free</span>
@@ -248,6 +280,23 @@
     <div class="cam-row">
       <button class="cam-cancel" id="camCancel">Cancel</button>
       <button class="cam-shoot" id="camShoot">Capture</button>
+    </div>
+  </div>
+</div>
+
+<!-- tasks panel -->
+<div class="cam" id="taskModal">
+  <div class="cam-card task-card">
+    <div class="mem-h">Daily checklist</div>
+    <div class="mem-sub">Daily tasks reset each morning. One-off tasks stay until you tick them. Ask Nova "what's still due?" anytime.</div>
+    <div class="task-add">
+      <input id="taskInput" type="text" placeholder="Add a task…" />
+      <label class="task-daily"><input type="checkbox" id="taskDaily" /> daily</label>
+      <button class="task-addbtn" id="taskAdd">Add</button>
+    </div>
+    <div class="task-list" id="taskList"></div>
+    <div class="mem-row">
+      <button class="mem-close" id="taskClose">Close</button>
     </div>
   </div>
 </div>
@@ -598,6 +647,49 @@
     memory=''; memText.value='';
   });
   $('memChat').addEventListener('click',()=>{ if(confirm('Clear the current conversation on this device? Nova\'s memory is kept.')){ try{localStorage.removeItem(LS_HIST);}catch(_){} location.reload(); } });
+
+  // ---- tasks / daily checklist ----
+  const taskModal=$('taskModal'), taskList=$('taskList'), taskInput=$('taskInput'), taskDaily=$('taskDaily'), taskBadge=$('taskBadge');
+  const checkSvg='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 6"/></svg>';
+  function renderTasks(tasks){
+    const due = tasks.filter(t=>!t.done).length;
+    if(due>0){ taskBadge.textContent=due; taskBadge.style.display=''; } else { taskBadge.style.display='none'; }
+    if(!tasks.length){ taskList.innerHTML='<div class="task-empty">No tasks yet. Add your first one above.</div>'; return; }
+    // due first, then done
+    tasks.sort((a,b)=> (a.done?1:0)-(b.done?1:0));
+    taskList.innerHTML='';
+    tasks.forEach(t=>{
+      const row=document.createElement('div'); row.className='task-item'+(t.done?' done':'');
+      row.innerHTML='<div class="task-check'+(t.done?' on':'')+'">'+checkSvg+'</div>'+
+        '<div class="task-text"></div>'+(t.daily?'<span class="task-tag">daily</span>':'')+
+        '<button class="task-del" title="Delete">×</button>';
+      row.querySelector('.task-text').textContent=t.text;
+      row.querySelector('.task-check').addEventListener('click',()=>toggleTask(t.id));
+      row.querySelector('.task-del').addEventListener('click',()=>deleteTask(t.id));
+      taskList.appendChild(row);
+    });
+  }
+  async function refreshTasks(open){
+    if(open){ taskList.innerHTML='<div class="task-empty">Loading…</div>'; taskModal.classList.add('open'); }
+    try{ const r=await api('/api/tasks'); const j=await r.json(); renderTasks(j.tasks||[]); }catch(_){}
+  }
+  async function addTask(){
+    const text=taskInput.value.trim(); if(!text) return;
+    taskInput.value='';
+    try{ const r=await api('/api/tasks',{ method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ text, daily:taskDaily.checked }) }); const j=await r.json(); renderTasks(j.tasks||[]); }catch(_){}
+    taskInput.focus();
+  }
+  async function toggleTask(id){
+    try{ const r=await api('/api/tasks/toggle',{ method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ id }) }); const j=await r.json(); renderTasks(j.tasks||[]); }catch(_){}
+  }
+  async function deleteTask(id){
+    try{ const r=await api('/api/tasks/delete',{ method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ id }) }); const j=await r.json(); renderTasks(j.tasks||[]); }catch(_){}
+  }
+  $('taskBtn').addEventListener('click',()=>refreshTasks(true));
+  $('taskClose').addEventListener('click',()=>taskModal.classList.remove('open'));
+  $('taskAdd').addEventListener('click',addTask);
+  taskInput.addEventListener('keydown',e=>{ if(e.key==='Enter') addTask(); });
+  refreshTasks(false); // load badge count on startup
 
   // ---- restore the previous conversation on load ----
   (function restore(){
