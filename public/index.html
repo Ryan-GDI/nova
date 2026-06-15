@@ -82,6 +82,7 @@
   .docbtns{ display:flex; gap:8px; margin-top:9px; }
   .docbtn{ display:inline-flex; align-items:center; gap:5px; font-family:"DM Sans",sans-serif; font-size:11.5px; color:var(--cool); background:rgba(30,58,107,.06); border:1px solid rgba(30,58,107,.22); border-radius:14px; padding:5px 11px; cursor:pointer; transition:background .2s; }
   .docbtn:hover{ background:rgba(30,58,107,.13); }
+  .docbtn.ok{ background:rgba(35,120,80,.14); border-color:rgba(35,120,80,.4); color:#237850; }
   .bubble .atts { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; justify-content:flex-end; }
   .att-thumb { width:46px; height:46px; border-radius:8px; object-fit:cover; border:1px solid rgba(255,255,255,.4); }
   .att-file { display:inline-flex; align-items:center; gap:6px; background:rgba(255,255,255,.18); border:1px solid rgba(255,255,255,.35); border-radius:8px; padding:5px 9px; font-size:12px; color:#fff; }
@@ -466,7 +467,7 @@
     el.innerHTML=html; convo.appendChild(el); convo.scrollTop=convo.scrollHeight;
   }
   function addMay(text){ if(empty)empty.remove(); const el=document.createElement('div'); el.className='msg may'; el.innerHTML='<span class="who">Nova</span><div class="bubble"></div>'; el.querySelector('.bubble').textContent=text;
-    if(text && text.length>40){ const row=document.createElement('div'); row.className='docbtns'; row.innerHTML='<button class="docbtn" data-f="docx">⬇ Word</button><button class="docbtn" data-f="pdf">⬇ PDF</button>'; row.querySelectorAll('.docbtn').forEach(b=>b.addEventListener('click',()=>downloadDoc(text,b.dataset.f))); el.appendChild(row); }
+    if(text && text.length>40){ const row=document.createElement('div'); row.className='docbtns'; row.innerHTML='<button class="docbtn" data-a="copy">⧉ Copy</button><button class="docbtn" data-a="html">⬇ HTML</button><button class="docbtn" data-f="docx">⬇ Word</button><button class="docbtn" data-f="pdf">⬇ PDF</button>'; row.querySelectorAll('.docbtn').forEach(b=>b.addEventListener('click',()=>{ if(b.dataset.a==='copy')copyText(text,b); else if(b.dataset.a==='html')downloadHtml(text); else downloadDoc(text,b.dataset.f); })); el.appendChild(row); }
     convo.appendChild(el); convo.scrollTop=convo.scrollHeight; return el.querySelector('.bubble'); }
 
   async function downloadDoc(text, format){
@@ -479,7 +480,28 @@
       const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1500);
     }catch(_){}
   }
-  function thinking(){ if(empty)empty.remove(); const el=document.createElement('div'); el.className='msg may'; el.innerHTML='<span class="who">Nova</span><div class="bubble dots"><span></span><span></span><span></span></div>'; convo.appendChild(el); convo.scrollTop=convo.scrollHeight; return el; }
+
+  // copy reply text to clipboard, with brief feedback on the button
+  async function copyText(text, btn){
+    const label = btn ? btn.textContent : '';
+    try{
+      if(navigator.clipboard && navigator.clipboard.writeText){ await navigator.clipboard.writeText(text); }
+      else { const ta=document.createElement('textarea'); ta.value=text; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.focus(); ta.select(); document.execCommand('copy'); ta.remove(); }
+      if(btn){ btn.textContent='✓ Copied'; btn.classList.add('ok'); setTimeout(()=>{ btn.textContent=label; btn.classList.remove('ok'); },1600); }
+    }catch(_){ if(btn){ btn.textContent='Copy failed'; setTimeout(()=>btn.textContent=label,1600); } }
+  }
+
+  // download the reply as a clean, self-contained HTML file
+  function downloadHtml(text){
+    const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    const looksLikeHtml = /<\/?[a-z][\s\S]*>/i.test(text);
+    const inner = looksLikeHtml ? text : esc(text).split(/\n{2,}/).map(p=>'<p>'+p.replace(/\n/g,'<br>')+'</p>').join('\n');
+    const doc='<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Nova</title>'+
+      '<style>body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:760px;margin:40px auto;padding:0 20px;color:#16233b;line-height:1.6}h1,h2,h3{color:#1e3a6b}a{color:#1e3a6b}</style>'+
+      '</head><body>'+inner+'</body></html>';
+    const blob=new Blob([doc],{type:'text/html'}); const url=URL.createObjectURL(blob);
+    const a=document.createElement('a'); a.href=url; a.download='nova-page.html'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1500);
+  }
 
   // ---- voice out ----
   let voice=null;
