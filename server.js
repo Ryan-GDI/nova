@@ -218,7 +218,9 @@ WHEN THE USER ATTACHES A DOCUMENT, EMAIL, IMAGE, OR SCREENSHOT:
 
 WEB: When a question needs current or factual info, use web search, then answer plainly in your own words.
 
-LONG CONTENT: For something long like a full email draft, keep any preamble short (it gets read aloud) and put the substance in the body for the user to read on screen.`;
+LONG CONTENT: For something long like a full email draft, keep any preamble short (it gets read aloud) and put the substance in the body for the user to read on screen.
+
+DAILY CHECKLIST: The user has a real, saved checklist built into the app — they open it with the "Tasks" button (the checklist icon in the header). You can SEE today's checklist below when it exists, so if they ask what's due, outstanding, or left to do, just tell them naturally from that list. Do NOT write out checklists, to-do lists, or HTML/code for tasks in chat — instead, point them to the Tasks button to add items (e.g. "Tap the Tasks button to add that — then I'll track it for you"). Only discuss the checklist conversationally; never paste markup.`;
 
 // Main conversation endpoint — accepts full message history (text + image/document/text blocks).
 app.post("/api/ask", guard, async (req, res) => {
