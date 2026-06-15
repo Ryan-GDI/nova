@@ -537,6 +537,7 @@
       const data=await res.json();
       const reply=(data.reply||data.error||"Sorry, I didn't catch that.").trim();
       thinkEl.remove(); addMay(reply); history.push({role:'assistant',content:reply}); save(); speak(reply);
+      if(data.tasksChanged){ try{ refreshTasks(false); }catch(_){} }
       updateMemory(text, reply);
     }catch(err){
       thinkEl.remove(); const m="I'm having trouble reaching my server right now — give me another try in a moment."; addMay(m); speak(m);
