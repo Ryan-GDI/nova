@@ -79,6 +79,9 @@
   .msg.you { align-self:flex-end; text-align:right; }
   .msg.you .bubble { background:var(--cool); border:1px solid var(--cool); padding:11px 15px; border-radius:16px 16px 4px 16px; color:#fff; display:inline-block; text-align:left; box-shadow:0 4px 14px -6px rgba(30,58,107,.5); }
   .msg.may .bubble { font-family:"Fraunces",serif; font-size:17px; font-weight:400; color:var(--text); line-height:1.55; white-space:pre-wrap; }
+  .docbtns{ display:flex; gap:8px; margin-top:9px; }
+  .docbtn{ display:inline-flex; align-items:center; gap:5px; font-family:"DM Sans",sans-serif; font-size:11.5px; color:var(--cool); background:rgba(30,58,107,.06); border:1px solid rgba(30,58,107,.22); border-radius:14px; padding:5px 11px; cursor:pointer; transition:background .2s; }
+  .docbtn:hover{ background:rgba(30,58,107,.13); }
   .bubble .atts { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; justify-content:flex-end; }
   .att-thumb { width:46px; height:46px; border-radius:8px; object-fit:cover; border:1px solid rgba(255,255,255,.4); }
   .att-file { display:inline-flex; align-items:center; gap:6px; background:rgba(255,255,255,.18); border:1px solid rgba(255,255,255,.35); border-radius:8px; padding:5px 9px; font-size:12px; color:#fff; }
@@ -413,7 +416,20 @@
     html+= (text?text:'') + '</div>';
     el.innerHTML=html; convo.appendChild(el); convo.scrollTop=convo.scrollHeight;
   }
-  function addMay(text){ if(empty)empty.remove(); const el=document.createElement('div'); el.className='msg may'; el.innerHTML='<span class="who">Nova</span><div class="bubble"></div>'; el.querySelector('.bubble').textContent=text; convo.appendChild(el); convo.scrollTop=convo.scrollHeight; return el.querySelector('.bubble'); }
+  function addMay(text){ if(empty)empty.remove(); const el=document.createElement('div'); el.className='msg may'; el.innerHTML='<span class="who">Nova</span><div class="bubble"></div>'; el.querySelector('.bubble').textContent=text;
+    if(text && text.length>40){ const row=document.createElement('div'); row.className='docbtns'; row.innerHTML='<button class="docbtn" data-f="docx">⬇ Word</button><button class="docbtn" data-f="pdf">⬇ PDF</button>'; row.querySelectorAll('.docbtn').forEach(b=>b.addEventListener('click',()=>downloadDoc(text,b.dataset.f))); el.appendChild(row); }
+    convo.appendChild(el); convo.scrollTop=convo.scrollHeight; return el.querySelector('.bubble'); }
+
+  async function downloadDoc(text, format){
+    try{
+      const res=await api('/api/document',{ method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ body:text, format }) });
+      if(!res.ok) return;
+      const blob=await res.blob();
+      let name='nova-document.'+(format==='pdf'?'pdf':'docx');
+      const cd=res.headers.get('Content-Disposition'); const m=cd&&cd.match(/filename="?([^"]+)"?/); if(m) name=m[1];
+      const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1500);
+    }catch(_){}
+  }
   function thinking(){ if(empty)empty.remove(); const el=document.createElement('div'); el.className='msg may'; el.innerHTML='<span class="who">Nova</span><div class="bubble dots"><span></span><span></span><span></span></div>'; convo.appendChild(el); convo.scrollTop=convo.scrollHeight; return el; }
 
   // ---- voice out ----
