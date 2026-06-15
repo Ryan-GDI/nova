@@ -174,6 +174,38 @@ async function saveMemory(text) {
   return memCache;
 }
 
+// ---- Tasks / daily checklist ----
+const TASKS_KEY = process.env.NOVA_TASKS_KEY || "nova_tasks";
+let tasksCache = []; // in-process fallback
+
+// Local "today" in Johannesburg, as YYYY-MM-DD
+function todayStr() {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Johannesburg" });
+}
+async function loadTasks() {
+  if (UPSTASH_URL && UPSTASH_TOKEN) {
+    try {
+      const j = await upstash(["GET", TASKS_KEY]);
+      if (typeof j?.result === "string" && j.result) tasksCache = JSON.parse(j.result);
+    } catch (_) { /* keep cache */ }
+  }
+  return Array.isArray(tasksCache) ? tasksCache : [];
+}
+async function saveTasks(list) {
+  tasksCache = Array.isArray(list) ? list : [];
+  if (UPSTASH_URL && UPSTASH_TOKEN) {
+    try { await upstash(["SET", TASKS_KEY, JSON.stringify(tasksCache)]); } catch (_) {}
+  }
+  return tasksCache;
+}
+// A task: { id, text, daily:boolean, doneDate:"YYYY-MM-DD"|null }
+// Daily tasks count as "done" only if completed today; otherwise they're due again.
+function withStatus(t) {
+  const today = todayStr();
+  const done = t.daily ? t.doneDate === today : !!t.doneDate;
+  return { ...t, done };
+}
+
 // May's personality + skills live here on the server so they stay consistent.
 const PERSONA = `You are Nova, a warm, sharp, and concise assistant who speaks aloud and can also read documents, emails, images, and screenshots.
 
@@ -200,11 +232,23 @@ app.post("/api/ask", guard, async (req, res) => {
     }
 
     const memory = (await loadMemory()).trim();
-    const system = memory
+    let system = memory
       ? PERSONA +
         "\n\nWHAT YOU REMEMBER ABOUT THIS USER (from past conversations — use it naturally, don't recite it back):\n" +
         memory
       : PERSONA;
+
+    // Make Nova aware of today's checklist so she can report what's still due.
+    try {
+      const tasks = (await loadTasks()).map(withStatus);
+      if (tasks.length) {
+        const due = tasks.filter(t => !t.done).map(t => "- " + t.text + (t.daily ? " (daily)" : ""));
+        const done = tasks.filter(t => t.done).map(t => "- " + t.text);
+        system += "\n\nTODAY'S CHECKLIST (" + todayStr() + "). If the user asks what's due/outstanding/left, tell them from this list, naturally and briefly.";
+        system += "\nSTILL DUE:\n" + (due.length ? due.join("\n") : "(nothing — all done!)");
+        if (done.length) system += "\nDONE TODAY:\n" + done.join("\n");
+      }
+    } catch (_) {}
 
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -340,6 +384,36 @@ app.post("/api/document", guard, async (req, res) => {
     console.error(e);
     res.status(500).json({ error: "Couldn't create the document." });
   }
+});
+
+// ---- Tasks endpoints ----
+app.get("/api/tasks", guard, async (_req, res) => {
+  const list = await loadTasks();
+  res.json({ tasks: list.map(withStatus), today: todayStr() });
+});
+app.post("/api/tasks", guard, async (req, res) => {
+  const text = (req.body?.text || "").toString().trim();
+  if (!text) return res.status(400).json({ error: "Empty task." });
+  const daily = !!req.body?.daily;
+  const list = await loadTasks();
+  list.push({ id: "t" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), text, daily, doneDate: null });
+  await saveTasks(list);
+  res.json({ tasks: list.map(withStatus), today: todayStr() });
+});
+app.post("/api/tasks/toggle", guard, async (req, res) => {
+  const id = (req.body?.id || "").toString();
+  const list = await loadTasks();
+  const t = list.find(x => x.id === id);
+  if (t) { const today = todayStr(); const isDone = t.daily ? t.doneDate === today : !!t.doneDate; t.doneDate = isDone ? null : today; }
+  await saveTasks(list);
+  res.json({ tasks: list.map(withStatus), today: todayStr() });
+});
+app.post("/api/tasks/delete", guard, async (req, res) => {
+  const id = (req.body?.id || "").toString();
+  let list = await loadTasks();
+  list = list.filter(x => x.id !== id);
+  await saveTasks(list);
+  res.json({ tasks: list.map(withStatus), today: todayStr() });
 });
 
 const PORT = process.env.PORT || 3000;
