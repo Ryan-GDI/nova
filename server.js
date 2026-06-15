@@ -6,6 +6,9 @@ import express from "express";
 import "dotenv/config";
 import crypto from "crypto";
 import { unzipSync, strFromU8 } from "fflate";
+import { Document, Packer, Paragraph, TextRun, AlignmentType, ImageRun, BorderStyle } from "docx";
+import PDFDocument from "pdfkit";
+import { readFileSync, existsSync } from "fs";
 
 const app = express();
 app.use(express.json({ limit: "40mb" })); // room for attachments (base64)
@@ -26,6 +29,77 @@ function extractDocxText(buffer) {
     .replace(/&quot;/g, '"').replace(/&apos;/g, "'")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+// ---- Branded document generation (Word + PDF) ----
+const BRAND = {
+  name: process.env.NOVA_BRAND_NAME || "Nova",
+  tagline: process.env.NOVA_BRAND_TAGLINE || "",
+  contact: process.env.NOVA_BRAND_CONTACT || "",
+};
+const C = { navy: "1e3a6b", gold: "c8881d", ink: "16233b", grey: "6b7589" };
+const LOGO_PATH = "public/brand-logo.png";
+function pngSize(buf) {
+  if (buf.length > 24 && buf[0] === 0x89 && buf[1] === 0x50)
+    return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) };
+  return null;
+}
+function getLogo() {
+  try { if (existsSync(LOGO_PATH)) { const b = readFileSync(LOGO_PATH); const s = pngSize(b); if (s) return { buf: b, ...s }; } } catch (_) {}
+  return null;
+}
+function parseBlocks(body) {
+  return (body || "").replace(/\r/g, "").split(/\n{2,}/).map(s => s.trim()).filter(Boolean).map(p => {
+    const m = p.match(/^#{1,3}\s+(.*)$/s);
+    return m ? { type: "heading", text: m[1].trim() } : { type: "para", text: p };
+  });
+}
+const niceDate = () => new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+
+async function buildDocx(body) {
+  const kids = [];
+  const logo = getLogo();
+  if (logo) kids.push(new Paragraph({ children: [ new ImageRun({ data: logo.buf, transformation: { width: Math.round(logo.w * (48 / logo.h)), height: 48 } }) ] }));
+  kids.push(new Paragraph({ children: [ new TextRun({ text: BRAND.name, bold: true, size: 34, color: C.navy }) ] }));
+  if (BRAND.tagline) kids.push(new Paragraph({ children: [ new TextRun({ text: BRAND.tagline, size: 20, color: C.gold }) ] }));
+  if (BRAND.contact) kids.push(new Paragraph({ children: [ new TextRun({ text: BRAND.contact, size: 16, color: C.grey }) ] }));
+  kids.push(new Paragraph({ border: { bottom: { color: C.gold, space: 1, style: BorderStyle.SINGLE, size: 12 } }, spacing: { after: 180 } }));
+  kids.push(new Paragraph({ children: [ new TextRun({ text: niceDate(), size: 18, color: C.grey }) ], spacing: { after: 200 } }));
+  for (const b of parseBlocks(body)) {
+    if (b.type === "heading") {
+      kids.push(new Paragraph({ children: [ new TextRun({ text: b.text, bold: true, size: 26, color: C.navy }) ], spacing: { before: 160, after: 80 } }));
+    } else {
+      const lines = b.text.split("\n"); const runs = [];
+      lines.forEach((ln, i) => { if (i > 0) runs.push(new TextRun({ break: 1 })); runs.push(new TextRun({ text: ln, size: 22, color: C.ink })); });
+      kids.push(new Paragraph({ children: runs, spacing: { after: 160 }, alignment: AlignmentType.JUSTIFIED }));
+    }
+  }
+  const doc = new Document({ sections: [ { properties: { page: { margin: { top: 1000, bottom: 1000, left: 1100, right: 1100 } } }, children: kids } ] });
+  return Packer.toBuffer(doc);
+}
+
+function buildPdf(body) {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ size: "A4", margin: 56 });
+    const chunks = []; doc.on("data", c => chunks.push(c)); doc.on("end", () => resolve(Buffer.concat(chunks))); doc.on("error", reject);
+    const W = 595, hex = h => "#" + h;
+    doc.rect(0, 0, W, 10).fill(hex(C.navy));
+    const logo = getLogo();
+    if (logo) { try { doc.image(logo.buf, W - 56 - logo.w * (40 / logo.h), 30, { height: 40 }); } catch (_) {} }
+    doc.fillColor(hex(C.navy)).font("Helvetica-Bold").fontSize(22).text(BRAND.name, 56, 44);
+    if (BRAND.tagline) doc.fillColor(hex(C.gold)).font("Helvetica").fontSize(11).text(BRAND.tagline, 56, doc.y);
+    if (BRAND.contact) doc.fillColor(hex(C.grey)).font("Helvetica").fontSize(9).text(BRAND.contact, 56, doc.y);
+    doc.moveDown(0.6);
+    const ly = doc.y; doc.moveTo(56, ly).lineTo(W - 56, ly).lineWidth(1.5).strokeColor(hex(C.gold)).stroke();
+    doc.moveDown(0.7);
+    doc.fillColor(hex(C.grey)).font("Helvetica").fontSize(10).text(niceDate());
+    doc.moveDown(0.7);
+    for (const b of parseBlocks(body)) {
+      if (b.type === "heading") { doc.moveDown(0.3).fillColor(hex(C.navy)).font("Helvetica-Bold").fontSize(13).text(b.text); doc.moveDown(0.2); }
+      else { doc.fillColor(hex(C.ink)).font("Helvetica").fontSize(11).text(b.text, { align: "justify", lineGap: 2 }); doc.moveDown(0.6); }
+    }
+    doc.end();
+  });
 }
 
 const API_KEY = process.env.ANTHROPIC_API_KEY;
@@ -240,6 +314,31 @@ app.post("/api/remember", guard, async (req, res) => {
     res.json({ memory: saved });
   } catch (e) {
     res.json({ memory: current });
+  }
+});
+
+// Generate a branded Word or PDF document from text.
+app.post("/api/document", guard, async (req, res) => {
+  try {
+    const body = (req.body?.body || "").toString();
+    const format = (req.body?.format || "docx").toString();
+    const title = (req.body?.title || "").toString();
+    if (!body.trim()) return res.status(400).json({ error: "Nothing to put in the document." });
+    const slug = (title || body).replace(/[#*]/g, "").trim().split(/\s+/).slice(0, 6).join("-")
+      .replace(/[^a-zA-Z0-9-]/g, "").slice(0, 50) || "nova-document";
+    if (format === "pdf") {
+      const buf = await buildPdf(body);
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="${slug}.pdf"`);
+      return res.send(buf);
+    }
+    const buf = await buildDocx(body);
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+    res.setHeader("Content-Disposition", `attachment; filename="${slug}.docx"`);
+    return res.send(buf);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Couldn't create the document." });
   }
 });
 
