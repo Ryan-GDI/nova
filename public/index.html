@@ -76,6 +76,7 @@
   .msg { max-width:88%; line-height:1.5; font-size:15.5px; animation:rise .4s ease both; }
   @keyframes rise { from{opacity:0; transform:translateY(8px);} to{opacity:1; transform:none;} }
   .msg .who { font-family:"Space Mono",monospace; font-size:9.5px; letter-spacing:2px; text-transform:uppercase; color:var(--dim); margin-bottom:5px; display:block; }
+  .msg .who .stamp { letter-spacing:1px; opacity:.6; font-size:9px; margin-left:6px; text-transform:none; }
   .msg.you { align-self:flex-end; text-align:right; }
   .msg.you .bubble { background:var(--cool); border:1px solid var(--cool); padding:11px 15px; border-radius:16px 16px 4px 16px; color:#fff; display:inline-block; text-align:left; box-shadow:0 4px 14px -6px rgba(30,58,107,.5); }
   .msg.may .bubble { font-family:"Fraunces",serif; font-size:17px; font-weight:400; color:var(--text); line-height:1.55; white-space:pre-wrap; }
@@ -378,7 +379,7 @@
       const blocks=(m.content||[]).map(b=>
         b.type==='image' ? {type:'text',text:'[image attached]'} :
         b.type==='document' ? {type:'text',text:'[PDF attached]'} : b);
-      return { role:m.role, content:blocks };
+      return { role:m.role, content:blocks, ts:m.ts };
     });
   }
   function save(){
@@ -454,10 +455,15 @@
   }
 
   // ---- conversation UI ----
-  function addUser(text, atts){
+  function fmtTime(ts){
+    const d = ts ? new Date(ts) : new Date();
+    try { return d.toLocaleString([], { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' }); }
+    catch(_){ return d.toLocaleString(); }
+  }
+  function addUser(text, atts, ts){
     if(empty)empty.remove();
     const el=document.createElement('div'); el.className='msg you';
-    let html='<span class="who">You</span><div class="bubble">';
+    let html='<span class="who">You <time class="stamp">'+fmtTime(ts)+'</time></span><div class="bubble">';
     if(atts && atts.length){
       html+='<div class="atts">';
       atts.forEach(a=>{ html += a.thumb ? '<img class="att-thumb" src="'+a.thumb+'">' : '<span class="att-file">'+fileIcon+a.name+'</span>'; });
@@ -466,7 +472,7 @@
     html+= (text?text:'') + '</div>';
     el.innerHTML=html; convo.appendChild(el); convo.scrollTop=convo.scrollHeight;
   }
-  function addMay(text){ if(empty)empty.remove(); const el=document.createElement('div'); el.className='msg may'; el.innerHTML='<span class="who">Nova</span><div class="bubble"></div>'; el.querySelector('.bubble').textContent=text;
+  function addMay(text, ts){ if(empty)empty.remove(); const el=document.createElement('div'); el.className='msg may'; el.innerHTML='<span class="who">Nova <time class="stamp">'+fmtTime(ts)+'</time></span><div class="bubble"></div>'; el.querySelector('.bubble').textContent=text;
     if(text && text.length>40){ const row=document.createElement('div'); row.className='docbtns'; row.innerHTML='<button class="docbtn" data-a="copy">⧉ Copy</button><button class="docbtn" data-a="html">⬇ HTML</button><button class="docbtn" data-f="docx">⬇ Word</button><button class="docbtn" data-f="pdf">⬇ PDF</button>'; row.querySelectorAll('.docbtn').forEach(b=>b.addEventListener('click',()=>{ if(b.dataset.a==='copy')copyText(text,b); else if(b.dataset.a==='html')downloadHtml(text); else downloadDoc(text,b.dataset.f); })); el.appendChild(row); }
     convo.appendChild(el); convo.scrollTop=convo.scrollHeight; return el.querySelector('.bubble'); }
 
@@ -518,7 +524,8 @@
     const sending = attachments.slice();          // snapshot for display
     const text = userText.trim() || 'Please read this and give me a short summary.';
 
-    addUser(userText.trim(), sending);
+    const now = Date.now();
+    addUser(userText.trim(), sending, now);
     attachments=[]; renderPending();
 
     let userMsg;
@@ -529,17 +536,19 @@
     } else {
       userMsg = { role:'user', content:text };
     }
+    userMsg.ts = now;
     history.push(userMsg);
 
     const thinkEl=thinking(); setState('thinking');
     try{
       const ctrl=new AbortController(); const timer=setTimeout(()=>ctrl.abort(),70000);
       let res;
-      try{ res=await api('/api/ask',{ method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({messages:history}), signal:ctrl.signal }); }
+      try{ res=await api('/api/ask',{ method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({messages:history.map(m=>({role:m.role, content:m.content}))}), signal:ctrl.signal }); }
       finally{ clearTimeout(timer); }
       const data=await res.json();
       const reply=(data.reply||data.error||"Sorry, I didn't catch that.").trim();
-      thinkEl.remove(); addMay(reply); history.push({role:'assistant',content:reply}); save(); speak(reply);
+      const rts=Date.now();
+      thinkEl.remove(); addMay(reply, rts); history.push({role:'assistant',content:reply,ts:rts}); save(); speak(reply);
       if(data.tasksChanged){ try{ refreshTasks(false); }catch(_){} }
       updateMemory(text, reply);
     }catch(err){
@@ -726,7 +735,7 @@
     let saved=null; try{ saved=JSON.parse(localStorage.getItem(LS_HIST)||'null'); }catch(_){}
     if(!saved || !saved.length) return;
     if(empty)empty.remove();
-    saved.forEach(m=>{ const t=textOf(m.content); if(!t)return; if(m.role==='user') addUser(t,[]); else addMay(t); history.push(m); });
+    saved.forEach(m=>{ const t=textOf(m.content); if(!t)return; if(m.role==='user') addUser(t,[],m.ts); else addMay(t,m.ts); history.push(m); });
   })();
 })();
 </script>
