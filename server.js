@@ -149,6 +149,36 @@ function guard(req, res, next) {
 // Does this Nova require a passcode? (so the page knows whether to show the lock)
 app.get("/api/authmode", (_req, res) => res.json({ required: !!PASSCODE }));
 
+// Open health check — visit /api/health in a browser to see what's live (no secrets).
+app.get("/api/health", (_req, res) => {
+  res.json({
+    ok: true,
+    version: "2026-06-15-diag-v3",
+    model: MODEL,
+    hasKey: !!API_KEY,
+    passcodeSet: !!PASSCODE,
+    upstash: !!(UPSTASH_URL && UPSTASH_TOKEN),
+    webSearch: process.env.NOVA_WEB_SEARCH !== "off",
+  });
+});
+
+// Self-test the AI connection — visit /api/selftest?key=YOURPASSCODE in a browser.
+// Does one tiny real call (no tools) and reports success + how long it took.
+app.get("/api/selftest", async (req, res) => {
+  if (PASSCODE && (req.query.key || "") !== PASSCODE) return res.status(401).json({ ok: false, error: "Add ?key=YOUR_PASSCODE to the URL." });
+  if (!API_KEY) return res.json({ ok: false, error: "No ANTHROPIC_API_KEY set on the server." });
+  const t0 = Date.now();
+  try {
+    const data = await callAnthropic({ model: MODEL, max_tokens: 16, messages: [{ role: "user", content: "Say OK." }] }, 15000);
+    const ms = Date.now() - t0;
+    if (data.error) return res.json({ ok: false, ms, error: data.error.message || "API error", type: data.error.type });
+    const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join(" ").trim();
+    res.json({ ok: true, ms, model: MODEL, reply: text });
+  } catch (e) {
+    res.json({ ok: false, ms: Date.now() - t0, error: e.name === "AbortError" ? "Timed out after 15s" : String(e.message || e) });
+  }
+});
+
 // Exchange the passcode for a session token the browser stores.
 app.post("/api/login", (req, res) => {
   if (!PASSCODE) return res.json({ ok: true, token: "" });
@@ -329,21 +359,26 @@ app.post("/api/ask", guard, async (req, res) => {
       }
     } catch (_) {}
 
-    const tools = [
-      { type: "web_search_20250305", name: "web_search", max_uses: 5 },
-      ...TASK_TOOLS,
-    ];
+    const tools = [];
+    if (process.env.NOVA_WEB_SEARCH !== "off") tools.push({ type: "web_search_20250305", name: "web_search", max_uses: 5 });
+    tools.push(...TASK_TOOLS);
 
     let convo = messages.slice();
     let reply = "";
     let tasksChanged = false;
 
     for (let step = 0; step < 4; step++) {
-      const data = await callAnthropic({ model: MODEL, max_tokens: 1500, system, messages: convo, tools });
+      const data = await callAnthropic({ model: MODEL, max_tokens: 1500, system, messages: convo, tools }, 30000);
       if (data.error) {
         return res.status(502).json({ error: data.error.message || "Anthropic API error." });
       }
       const textPart = (data.content || []).filter(b => b.type === "text").map(b => b.text).join(" ").trim();
+
+      // web search may pause the turn; send the partial back to let it finish
+      if (data.stop_reason === "pause_turn") {
+        convo.push({ role: "assistant", content: data.content });
+        continue;
+      }
 
       if (data.stop_reason === "tool_use") {
         const results = [];
