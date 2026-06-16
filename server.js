@@ -330,76 +330,85 @@ LONG CONTENT: For something long like a full email draft, keep any preamble shor
 DAILY CHECKLIST: The user has a real, saved checklist built into the app (the "Tasks" button). You can SEE today's checklist below when it exists, and you can MANAGE it with your tools: use add_task when they ask to add/note/remember a task (set daily=true for things they do every day), complete_task when they say something's done, and remove_task to delete one. After using a tool, confirm briefly and naturally in one sentence (e.g. "Added that to your checklist"). If they ask what's due, just tell them from the list below. Never write out checklists or HTML/code for tasks in chat.`;
 
 // Main conversation endpoint — accepts full message history (text + image/document/text blocks).
+// Core chat pipeline, shared by /api/ask and the diagnostic /api/asktest.
+async function generateReply(messages) {
+  const memory = (await loadMemory()).trim();
+  let system = memory
+    ? PERSONA +
+      "\n\nWHAT YOU REMEMBER ABOUT THIS USER (from past conversations — use it naturally, don't recite it back):\n" +
+      memory
+    : PERSONA;
+
+  try {
+    const tasks = (await loadTasks()).map(withStatus);
+    if (tasks.length) {
+      const due = tasks.filter(t => !t.done).map(t => "- " + t.text + (t.daily ? " (daily)" : ""));
+      const done = tasks.filter(t => t.done).map(t => "- " + t.text);
+      system += "\n\nTODAY'S CHECKLIST (" + todayStr() + "). If the user asks what's due/outstanding/left, tell them from this list, naturally and briefly.";
+      system += "\nSTILL DUE:\n" + (due.length ? due.join("\n") : "(nothing — all done!)");
+      if (done.length) system += "\nDONE TODAY:\n" + done.join("\n");
+    }
+  } catch (_) {}
+
+  const tools = [];
+  if (process.env.NOVA_WEB_SEARCH !== "off") tools.push({ type: "web_search_20250305", name: "web_search", max_uses: 5 });
+  tools.push(...TASK_TOOLS);
+
+  let convo = messages.slice();
+  let reply = "";
+  let tasksChanged = false;
+  let lastStop = "";
+
+  for (let step = 0; step < 4; step++) {
+    const data = await callAnthropic({ model: MODEL, max_tokens: 1500, system, messages: convo, tools }, 30000);
+    if (data.error) { const err = new Error(data.error.message || "Anthropic API error."); err.apiType = data.error.type; throw err; }
+    lastStop = data.stop_reason || "";
+    const textPart = (data.content || []).filter(b => b.type === "text").map(b => b.text).join(" ").trim();
+
+    if (data.stop_reason === "pause_turn") { convo.push({ role: "assistant", content: data.content }); continue; }
+
+    if (data.stop_reason === "tool_use") {
+      const results = [];
+      for (const b of (data.content || [])) {
+        if (b.type !== "tool_use") continue;
+        const out = await runTaskTool(b.name, b.input);
+        if (out != null) { tasksChanged = true; results.push({ type: "tool_result", tool_use_id: b.id, content: out }); }
+      }
+      if (!results.length) { reply = textPart; break; }
+      convo.push({ role: "assistant", content: data.content });
+      convo.push({ role: "user", content: results });
+      continue;
+    }
+    reply = textPart;
+    break;
+  }
+  return { reply: reply || "Done.", tasksChanged, lastStop };
+}
+
 app.post("/api/ask", guard, async (req, res) => {
   try {
-    if (!API_KEY) {
-      return res.status(500).json({ error: "Server is missing ANTHROPIC_API_KEY." });
-    }
+    if (!API_KEY) return res.status(500).json({ error: "Server is missing ANTHROPIC_API_KEY." });
     const messages = Array.isArray(req.body?.messages) ? req.body.messages.slice(-16) : null;
-    if (!messages || !messages.length) {
-      return res.status(400).json({ error: "No messages provided." });
-    }
-
-    const memory = (await loadMemory()).trim();
-    let system = memory
-      ? PERSONA +
-        "\n\nWHAT YOU REMEMBER ABOUT THIS USER (from past conversations — use it naturally, don't recite it back):\n" +
-        memory
-      : PERSONA;
-
-    // Make Nova aware of today's checklist so she can report what's still due.
-    try {
-      const tasks = (await loadTasks()).map(withStatus);
-      if (tasks.length) {
-        const due = tasks.filter(t => !t.done).map(t => "- " + t.text + (t.daily ? " (daily)" : ""));
-        const done = tasks.filter(t => t.done).map(t => "- " + t.text);
-        system += "\n\nTODAY'S CHECKLIST (" + todayStr() + "). If the user asks what's due/outstanding/left, tell them from this list, naturally and briefly.";
-        system += "\nSTILL DUE:\n" + (due.length ? due.join("\n") : "(nothing — all done!)");
-        if (done.length) system += "\nDONE TODAY:\n" + done.join("\n");
-      }
-    } catch (_) {}
-
-    const tools = [];
-    if (process.env.NOVA_WEB_SEARCH !== "off") tools.push({ type: "web_search_20250305", name: "web_search", max_uses: 5 });
-    tools.push(...TASK_TOOLS);
-
-    let convo = messages.slice();
-    let reply = "";
-    let tasksChanged = false;
-
-    for (let step = 0; step < 4; step++) {
-      const data = await callAnthropic({ model: MODEL, max_tokens: 1500, system, messages: convo, tools }, 30000);
-      if (data.error) {
-        return res.status(502).json({ error: data.error.message || "Anthropic API error." });
-      }
-      const textPart = (data.content || []).filter(b => b.type === "text").map(b => b.text).join(" ").trim();
-
-      // web search may pause the turn; send the partial back to let it finish
-      if (data.stop_reason === "pause_turn") {
-        convo.push({ role: "assistant", content: data.content });
-        continue;
-      }
-
-      if (data.stop_reason === "tool_use") {
-        const results = [];
-        for (const b of (data.content || [])) {
-          if (b.type !== "tool_use") continue;
-          const out = await runTaskTool(b.name, b.input); // null for non-task (server) tools
-          if (out != null) { tasksChanged = true; results.push({ type: "tool_result", tool_use_id: b.id, content: out }); }
-        }
-        if (!results.length) { reply = textPart; break; } // nothing for us to run
-        convo.push({ role: "assistant", content: data.content });
-        convo.push({ role: "user", content: results });
-        continue; // loop for Nova's spoken confirmation
-      }
-      reply = textPart;
-      break;
-    }
-
-    res.json({ reply: reply || "Done.", tasksChanged });
+    if (!messages || !messages.length) return res.status(400).json({ error: "No messages provided." });
+    const out = await generateReply(messages);
+    res.json({ reply: out.reply, tasksChanged: out.tasksChanged });
   } catch (e) {
     console.error(e);
-    res.status(500).json({ error: "Server error reaching the assistant." });
+    res.status(502).json({ error: e.message || "Server error reaching the assistant." });
+  }
+});
+
+// Diagnostic: runs the FULL chat pipeline (tools + system) from a browser.
+// Visit /api/asktest?key=YOURPASSCODE&q=hello  — shows the result or the exact error.
+app.get("/api/asktest", async (req, res) => {
+  if (PASSCODE && (req.query.key || "") !== PASSCODE) return res.status(401).json({ ok: false, error: "Add ?key=YOUR_PASSCODE to the URL." });
+  const q = (req.query.q || "hello").toString();
+  const t0 = Date.now();
+  try {
+    const out = await generateReply([{ role: "user", content: q }]);
+    res.json({ ok: true, ms: Date.now() - t0, q, reply: out.reply, tasksChanged: out.tasksChanged, lastStop: out.lastStop });
+  } catch (e) {
+    res.json({ ok: false, ms: Date.now() - t0, q, error: e.message || String(e), apiType: e.apiType || null });
   }
 });
 
