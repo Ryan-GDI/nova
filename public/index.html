@@ -509,6 +509,9 @@
     const a=document.createElement('a'); a.href=url; a.download='nova-page.html'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1500);
   }
 
+  // typing indicator shown while Nova is working
+  function thinking(){ if(empty)empty.remove(); const el=document.createElement('div'); el.className='msg may'; el.innerHTML='<span class="who">Nova</span><div class="bubble dots"><span></span><span></span><span></span></div>'; convo.appendChild(el); convo.scrollTop=convo.scrollHeight; return el; }
+
   // ---- voice out ----
   let voice=null;
   function pickVoice(){ const vs=speechSynthesis.getVoices(); if(!vs.length)return; const pref=['Samantha','Google UK English Female','Microsoft Aria','Microsoft Zira','Google US English']; voice=vs.find(v=>pref.includes(v.name))||vs.find(v=>/female/i.test(v.name))||vs.find(v=>/en[-_]/i.test(v.lang))||vs[0]; }
