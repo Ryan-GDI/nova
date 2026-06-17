@@ -187,6 +187,9 @@
   .task-del{ background:transparent; border:none; color:var(--dim); cursor:pointer; font-size:18px; line-height:1; padding:2px 6px; }
   .task-del:hover{ color:var(--warm-deep); }
   .task-empty{ text-align:center; color:var(--dim); font-family:"Fraunces",serif; font-style:italic; padding:24px 0; }
+  .task-notify{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:14px; padding-top:14px; border-top:1px solid var(--line); }
+  .task-notify span{ flex:1; min-width:160px; font-family:"DM Sans",sans-serif; font-size:12.5px; color:var(--dim); }
+  .task-notify.on span{ color:#237850; }
 
   /* lock screen */
   .lock{ position:fixed; inset:0; z-index:50; background:var(--void); display:none; align-items:center; justify-content:center; padding:24px; }
@@ -303,6 +306,10 @@
       <button class="task-addbtn" id="taskAdd">Add</button>
     </div>
     <div class="task-list" id="taskList"></div>
+    <div class="task-notify" id="taskNotify">
+      <span id="notifyStatus">Get phone nudges that repeat until a task is done.</span>
+      <button class="task-addbtn" id="notifyBtn">Enable notifications</button>
+    </div>
     <div class="mem-row">
       <button class="mem-close" id="taskClose">Close</button>
     </div>
@@ -756,6 +763,43 @@
   $('taskAdd').addEventListener('click',addTask);
   taskInput.addEventListener('keydown',e=>{ if(e.key==='Enter') addTask(); });
   refreshTasks(false); // load badge count on startup
+
+  // ---- push notifications ----
+  const notifyBtn=$('notifyBtn'), notifyStatus=$('notifyStatus'), taskNotify=$('taskNotify');
+  function urlB64ToUint8(base64){
+    const pad='='.repeat((4-base64.length%4)%4); const b=(base64+pad).replace(/-/g,'+').replace(/_/g,'/');
+    const raw=atob(b); const arr=new Uint8Array(raw.length); for(let i=0;i<raw.length;i++)arr[i]=raw.charCodeAt(i); return arr;
+  }
+  function setNotifyState(on, msg){
+    taskNotify.classList.toggle('on',on);
+    if(msg) notifyStatus.textContent=msg;
+    if(on){ notifyBtn.style.display='none'; }
+  }
+  async function refreshNotifyUI(){
+    if(!('serviceWorker' in navigator) || !('PushManager' in window)){
+      notifyStatus.textContent="Notifications aren't supported here. On iPhone, add Nova to your Home Screen first.";
+      notifyBtn.style.display='none'; return;
+    }
+    if(Notification.permission==='granted'){
+      try{ const reg=await navigator.serviceWorker.getRegistration(); const sub=reg&&await reg.pushManager.getSubscription(); if(sub){ setNotifyState(true,'Notifications are on for this device. ✓'); return; } }catch(_){}
+    }
+  }
+  async function enableNotifications(){
+    try{
+      notifyBtn.disabled=true; notifyStatus.textContent='Setting up…';
+      const r=await api('/api/push/key'); const j=await r.json();
+      if(!j.enabled || !j.key){ notifyStatus.textContent='Push isn\u2019t set up on the server yet.'; notifyBtn.disabled=false; return; }
+      const reg=await navigator.serviceWorker.register('/sw.js');
+      await navigator.serviceWorker.ready;
+      const perm=await Notification.requestPermission();
+      if(perm!=='granted'){ notifyStatus.textContent='Permission was declined. You can enable it in your browser settings.'; notifyBtn.disabled=false; return; }
+      const sub=await reg.pushManager.subscribe({ userVisibleOnly:true, applicationServerKey:urlB64ToUint8(j.key) });
+      const sr=await api('/api/push/subscribe',{ method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ subscription:sub }) });
+      if(sr.ok){ setNotifyState(true,'Notifications are on for this device. ✓'); await api('/api/push/test',{method:'POST'}); }
+      else { notifyStatus.textContent='Could not save the subscription — try again.'; notifyBtn.disabled=false; }
+    }catch(e){ notifyStatus.textContent='Could not enable notifications here. On iPhone, make sure Nova is added to your Home Screen.'; notifyBtn.disabled=false; }
+  }
+  if(notifyBtn){ notifyBtn.addEventListener('click',enableNotifications); refreshNotifyUI(); }
 
   // ---- restore the previous conversation on load ----
   (function restore(){
