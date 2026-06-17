@@ -585,7 +585,7 @@ app.get("/api/tasks/ics", async (req, res) => {
   if (!ics) return res.status(400).send("This task has no time set.");
   const fname = (task.text || "reminder").replace(/[^a-zA-Z0-9]+/g, "-").slice(0, 40) || "reminder";
   res.setHeader("Content-Type", "text/calendar; charset=utf-8");
-  res.setHeader("Content-Disposition", `attachment; filename="${fname}.ics"`);
+  res.setHeader("Content-Disposition", `inline; filename="${fname}.ics"`);
   res.send(ics);
 });
 
