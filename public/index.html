@@ -167,6 +167,10 @@
   .task-add{ display:flex; gap:8px; align-items:center; margin-bottom:14px; flex-wrap:wrap; }
   .task-add input[type=text]{ flex:1; min-width:160px; padding:11px 13px; border:1px solid var(--line); border-radius:12px; font-family:"DM Sans",sans-serif; font-size:14px; color:var(--text); outline:none; background:#fff; }
   .task-add input[type=text]:focus{ border-color:rgba(30,58,107,.5); }
+  .task-add input[type=time], .task-add input[type=date]{ padding:9px 10px; border:1px solid var(--line); border-radius:12px; font-family:"DM Sans",sans-serif; font-size:13px; color:var(--text); background:#fff; outline:none; }
+  .task-cal{ background:transparent; border:none; cursor:pointer; padding:2px 6px; font-size:15px; line-height:1; opacity:.75; }
+  .task-cal:hover{ opacity:1; }
+  .task-due{ font-family:"Space Mono",monospace; font-size:8.5px; text-transform:uppercase; letter-spacing:1px; color:var(--cool); background:rgba(30,58,107,.08); padding:2px 6px; border-radius:8px; white-space:nowrap; }
   .task-daily{ display:flex; align-items:center; gap:5px; font-family:"Space Mono",monospace; font-size:10px; text-transform:uppercase; letter-spacing:1px; color:var(--dim); cursor:pointer; }
   .task-addbtn{ padding:10px 16px; border:none; border-radius:12px; background:var(--cool); color:#fff; font-family:"DM Sans",sans-serif; font-size:14px; font-weight:600; cursor:pointer; }
   .task-addbtn:hover{ background:#2f5596; }
@@ -293,6 +297,8 @@
     <div class="mem-sub">Daily tasks reset each morning. One-off tasks stay until you tick them. Ask Nova "what's still due?" anytime.</div>
     <div class="task-add">
       <input id="taskInput" type="text" placeholder="Add a task…" />
+      <input id="taskTime" type="time" title="Optional reminder time" />
+      <input id="taskDate" type="date" title="Optional date (for one-off tasks)" />
       <label class="task-daily"><input type="checkbox" id="taskDaily" /> daily</label>
       <button class="task-addbtn" id="taskAdd">Add</button>
     </div>
@@ -691,25 +697,39 @@
   $('memChat').addEventListener('click',()=>{ if(confirm('Clear the current conversation on this device? Nova\'s memory is kept.')){ try{localStorage.removeItem(LS_HIST);}catch(_){} location.reload(); } });
 
   // ---- tasks / daily checklist ----
-  const taskModal=$('taskModal'), taskList=$('taskList'), taskInput=$('taskInput'), taskDaily=$('taskDaily'), taskBadge=$('taskBadge');
+  const taskModal=$('taskModal'), taskList=$('taskList'), taskInput=$('taskInput'), taskDaily=$('taskDaily'), taskBadge=$('taskBadge'), taskTime=$('taskTime'), taskDate=$('taskDate');
   const checkSvg='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 6"/></svg>';
+  function dueLabel(t){
+    if(!t.due) return '';
+    if(t.daily) return t.due + ' daily';
+    const [d,tm]=t.due.split('T'); if(!d) return t.due;
+    try{ const dt=new Date(t.due); return dt.toLocaleString([], {day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}); }catch(_){ return (tm||'')+' '+d; }
+  }
   function renderTasks(tasks){
     const due = tasks.filter(t=>!t.done).length;
     if(due>0){ taskBadge.textContent=due; taskBadge.style.display=''; } else { taskBadge.style.display='none'; }
     if(!tasks.length){ taskList.innerHTML='<div class="task-empty">No tasks yet. Add your first one above.</div>'; return; }
-    // due first, then done
     tasks.sort((a,b)=> (a.done?1:0)-(b.done?1:0));
     taskList.innerHTML='';
     tasks.forEach(t=>{
       const row=document.createElement('div'); row.className='task-item'+(t.done?' done':'');
       row.innerHTML='<div class="task-check'+(t.done?' on':'')+'">'+checkSvg+'</div>'+
-        '<div class="task-text"></div>'+(t.daily?'<span class="task-tag">daily</span>':'')+
+        '<div class="task-text"></div>'+
+        (t.due?'<span class="task-due"></span>':'')+
+        (t.daily?'<span class="task-tag">daily</span>':'')+
+        (t.due?'<button class="task-cal" title="Add to phone calendar with an alarm">📅</button>':'')+
         '<button class="task-del" title="Delete">×</button>';
       row.querySelector('.task-text').textContent=t.text;
+      if(t.due) row.querySelector('.task-due').textContent=dueLabel(t);
       row.querySelector('.task-check').addEventListener('click',()=>toggleTask(t.id));
       row.querySelector('.task-del').addEventListener('click',()=>deleteTask(t.id));
+      const cal=row.querySelector('.task-cal'); if(cal) cal.addEventListener('click',()=>addToCalendar(t.id));
       taskList.appendChild(row);
     });
+  }
+  function addToCalendar(id){
+    const url='/api/tasks/ics?id='+encodeURIComponent(id)+(AUTH.token?'&t='+encodeURIComponent(AUTH.token):'');
+    window.open(url,'_blank');
   }
   async function refreshTasks(open){
     if(open){ taskList.innerHTML='<div class="task-empty">Loading…</div>'; taskModal.classList.add('open'); }
@@ -717,8 +737,14 @@
   }
   async function addTask(){
     const text=taskInput.value.trim(); if(!text) return;
-    taskInput.value='';
-    try{ const r=await api('/api/tasks',{ method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ text, daily:taskDaily.checked }) }); const j=await r.json(); renderTasks(j.tasks||[]); }catch(_){}
+    let due=null;
+    const tm=taskTime.value; // "HH:MM"
+    if(tm){
+      if(taskDaily.checked){ due=tm; }
+      else { const d=taskDate.value || new Date().toISOString().slice(0,10); due=d+'T'+tm; }
+    }
+    taskInput.value=''; taskTime.value=''; taskDate.value='';
+    try{ const r=await api('/api/tasks',{ method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ text, daily:taskDaily.checked, due }) }); const j=await r.json(); renderTasks(j.tasks||[]); }catch(_){}
     taskInput.focus();
   }
   async function toggleTask(id){
