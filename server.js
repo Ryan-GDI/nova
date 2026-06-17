@@ -6,6 +6,7 @@ import express from "express";
 import "dotenv/config";
 import crypto from "crypto";
 import { unzipSync, strFromU8 } from "fflate";
+import webpush from "web-push";
 import { Document, Packer, Paragraph, TextRun, AlignmentType, ImageRun, BorderStyle } from "docx";
 import PDFDocument from "pdfkit";
 import { readFileSync, existsSync } from "fs";
@@ -587,6 +588,87 @@ app.get("/api/tasks/ics", async (req, res) => {
   res.setHeader("Content-Type", "text/calendar; charset=utf-8");
   res.setHeader("Content-Disposition", `inline; filename="${fname}.ics"`);
   res.send(ics);
+});
+
+// ---- Push notifications ----
+const VAPID_PUBLIC = process.env.NOVA_VAPID_PUBLIC || "";
+const VAPID_PRIVATE = process.env.NOVA_VAPID_PRIVATE || "";
+const VAPID_SUBJECT = process.env.NOVA_VAPID_SUBJECT || "mailto:nova@naicker.cc";
+const PUSH_ON = !!(VAPID_PUBLIC && VAPID_PRIVATE);
+if (PUSH_ON) { try { webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC, VAPID_PRIVATE); } catch (e) { console.error("VAPID setup failed", e); } }
+const SUBS_KEY = process.env.NOVA_SUBS_KEY || "nova_push_subs";
+let subsCache = [];
+async function loadSubs() {
+  if (UPSTASH_URL && UPSTASH_TOKEN) {
+    try { const j = await upstash(["GET", SUBS_KEY]); if (typeof j?.result === "string" && j.result) subsCache = JSON.parse(j.result); } catch (_) {}
+  }
+  return Array.isArray(subsCache) ? subsCache : [];
+}
+async function saveSubs(list) {
+  subsCache = Array.isArray(list) ? list : [];
+  if (UPSTASH_URL && UPSTASH_TOKEN) { try { await upstash(["SET", SUBS_KEY, JSON.stringify(subsCache)]); } catch (_) {} }
+  return subsCache;
+}
+async function sendPush(payload) {
+  const subs = await loadSubs();
+  if (!subs.length) return { sent: 0 };
+  let sent = 0; const survivors = [];
+  for (const s of subs) {
+    try { await webpush.sendNotification(s, JSON.stringify(payload)); sent++; survivors.push(s); }
+    catch (e) { if (e.statusCode === 404 || e.statusCode === 410) { /* expired — drop it */ } else { survivors.push(s); } }
+  }
+  if (survivors.length !== subs.length) await saveSubs(survivors);
+  return { sent };
+}
+
+// Give the browser the public key it needs to subscribe.
+app.get("/api/push/key", (_req, res) => res.json({ key: VAPID_PUBLIC, enabled: PUSH_ON }));
+
+// Save a device's push subscription.
+app.post("/api/push/subscribe", guard, async (req, res) => {
+  const sub = req.body?.subscription;
+  if (!sub || !sub.endpoint) return res.status(400).json({ error: "No subscription." });
+  const subs = await loadSubs();
+  if (!subs.find(s => s.endpoint === sub.endpoint)) { subs.push(sub); await saveSubs(subs); }
+  res.json({ ok: true, count: subs.length });
+});
+
+// Send a test notification to all devices.
+app.post("/api/push/test", guard, async (_req, res) => {
+  if (!PUSH_ON) return res.status(400).json({ error: "Push not configured on the server." });
+  const r = await sendPush({ title: "Nova", body: "Push notifications are working 🎉" });
+  res.json(r);
+});
+
+// The pinger calls this every few minutes. It nudges any task that's due and not done,
+// re-nudging every ~10 minutes until completed. Token via ?key= so a cron service can call it.
+app.get("/api/push/check", async (req, res) => {
+  if (PASSCODE && (req.query.key || "") !== PASSCODE) return res.status(401).json({ error: "Add ?key=PASSCODE" });
+  if (!PUSH_ON) return res.json({ ok: false, error: "push off" });
+  const now = new Date();
+  const todJ = todayStr();
+  // current Johannesburg wall-clock minutes
+  const hm = now.toLocaleTimeString("en-GB", { timeZone: "Africa/Johannesburg", hour: "2-digit", minute: "2-digit" });
+  const list = await loadTasks();
+  let nudged = 0, changed = false;
+  for (const t of list) {
+    if (!t.due) continue;
+    const isDone = t.daily ? t.doneDate === todJ : !!t.doneDate;
+    if (isDone) continue;
+    // figure out the task's due time-of-day and whether it's reached
+    let dueHM = null, dueDate = null;
+    if (t.daily) { dueHM = t.due; dueDate = todJ; }
+    else { const [d, tm] = (t.due || "").split("T"); dueDate = d; dueHM = tm; }
+    if (!dueHM) continue;
+    if (dueDate !== todJ) continue;          // only nudge on the due date (daily = today)
+    if (hm < dueHM) continue;                 // not yet due
+    const last = t.lastNudge || 0;
+    if (now.getTime() - last < 10 * 60 * 1000) continue; // throttle: every 10 min
+    await sendPush({ title: "Nova reminder", body: t.text, tag: t.id });
+    t.lastNudge = now.getTime(); changed = true; nudged++;
+  }
+  if (changed) await saveTasks(list);
+  res.json({ ok: true, nudged, time: hm });
 });
 
 const PORT = process.env.PORT || 3000;
