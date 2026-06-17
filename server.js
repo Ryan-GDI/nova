@@ -342,7 +342,7 @@ async function generateReply(messages) {
   try {
     const tasks = (await loadTasks()).map(withStatus);
     if (tasks.length) {
-      const due = tasks.filter(t => !t.done).map(t => "- " + t.text + (t.daily ? " (daily)" : ""));
+      const due = tasks.filter(t => !t.done).map(t => "- " + t.text + (t.due ? " [at " + t.due + "]" : "") + (t.daily ? " (daily)" : ""));
       const done = tasks.filter(t => t.done).map(t => "- " + t.text);
       system += "\n\nTODAY'S CHECKLIST (" + todayStr() + "). If the user asks what's due/outstanding/left, tell them from this list, naturally and briefly.";
       system += "\nSTILL DUE:\n" + (due.length ? due.join("\n") : "(nothing — all done!)");
@@ -515,8 +515,9 @@ app.post("/api/tasks", guard, async (req, res) => {
   const text = (req.body?.text || "").toString().trim();
   if (!text) return res.status(400).json({ error: "Empty task." });
   const daily = !!req.body?.daily;
+  const due = (req.body?.due || "").toString().trim() || null; // "HH:MM" for daily, or "YYYY-MM-DDTHH:MM" for one-off
   const list = await loadTasks();
-  list.push({ id: "t" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), text, daily, doneDate: null });
+  list.push({ id: "t" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), text, daily, due, doneDate: null });
   await saveTasks(list);
   res.json({ tasks: list.map(withStatus), today: todayStr() });
 });
@@ -534,6 +535,58 @@ app.post("/api/tasks/delete", guard, async (req, res) => {
   list = list.filter(x => x.id !== id);
   await saveTasks(list);
   res.json({ tasks: list.map(withStatus), today: todayStr() });
+});
+
+// Build an iCalendar (.ics) event with an alarm, for a task that has a due time.
+function icsEscape(s) { return (s || "").replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\n/g, "\\n"); }
+function pad(n) { return String(n).padStart(2, "0"); }
+function buildICS(task) {
+  if (!task.due) return null;
+  // Determine the wall-clock start (floating local time, so the phone rings at that clock time).
+  let datePart, timePart;
+  if (task.daily) {
+    // "HH:MM" repeating daily, first occurrence today (Johannesburg date)
+    datePart = todayStr().replace(/-/g, "");
+    timePart = task.due.replace(":", "") + "00";
+  } else {
+    // "YYYY-MM-DDTHH:MM"
+    const [d, t] = task.due.split("T");
+    if (!d || !t) return null;
+    datePart = d.replace(/-/g, "");
+    timePart = t.replace(":", "") + "00";
+  }
+  const dtStart = datePart + "T" + timePart; // floating local time
+  const now = new Date();
+  const stamp = now.getUTCFullYear() + pad(now.getUTCMonth() + 1) + pad(now.getUTCDate()) + "T" +
+    pad(now.getUTCHours()) + pad(now.getUTCMinutes()) + pad(now.getUTCSeconds()) + "Z";
+  const lines = [
+    "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Nova//Checklist//EN", "CALSCALE:GREGORIAN",
+    "BEGIN:VEVENT",
+    "UID:" + task.id + "@nova.naicker.cc",
+    "DTSTAMP:" + stamp,
+    "DTSTART:" + dtStart,
+    "DURATION:PT15M",
+    "SUMMARY:" + icsEscape(task.text),
+  ];
+  if (task.daily) lines.push("RRULE:FREQ=DAILY");
+  lines.push("BEGIN:VALARM", "ACTION:DISPLAY", "DESCRIPTION:" + icsEscape(task.text), "TRIGGER:PT0S", "END:VALARM");
+  lines.push("END:VEVENT", "END:VCALENDAR");
+  return lines.join("\r\n");
+}
+
+// Download a task as a calendar event. Token passed as ?t= since this opens directly in the browser.
+app.get("/api/tasks/ics", async (req, res) => {
+  if (PASSCODE && (req.query.t || "") !== SESSION_TOKEN) return res.status(401).send("Locked.");
+  const id = (req.query.id || "").toString();
+  const list = await loadTasks();
+  const task = list.find(x => x.id === id);
+  if (!task) return res.status(404).send("Task not found.");
+  const ics = buildICS(task);
+  if (!ics) return res.status(400).send("This task has no time set.");
+  const fname = (task.text || "reminder").replace(/[^a-zA-Z0-9]+/g, "-").slice(0, 40) || "reminder";
+  res.setHeader("Content-Type", "text/calendar; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="${fname}.ics"`);
+  res.send(ics);
 });
 
 const PORT = process.env.PORT || 3000;
