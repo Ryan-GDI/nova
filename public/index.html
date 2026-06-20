@@ -84,6 +84,8 @@
   .docbtn{ display:inline-flex; align-items:center; gap:5px; font-family:"DM Sans",sans-serif; font-size:11.5px; color:var(--cool); background:rgba(30,58,107,.06); border:1px solid rgba(30,58,107,.22); border-radius:14px; padding:5px 11px; cursor:pointer; transition:background .2s; }
   .docbtn:hover{ background:rgba(30,58,107,.13); }
   .docbtn.ok{ background:rgba(35,120,80,.14); border-color:rgba(35,120,80,.4); color:#237850; }
+  .docbtn.wa{ background:rgba(37,211,102,.12); border-color:rgba(18,140,80,.4); color:#128c50; }
+  .docbtn.wa:hover{ background:rgba(37,211,102,.22); }
   .bubble .atts { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; justify-content:flex-end; }
   .att-thumb { width:46px; height:46px; border-radius:8px; object-fit:cover; border:1px solid rgba(255,255,255,.4); }
   .att-file { display:inline-flex; align-items:center; gap:6px; background:rgba(255,255,255,.18); border:1px solid rgba(255,255,255,.35); border-radius:8px; padding:5px 9px; font-size:12px; color:#fff; }
@@ -486,7 +488,7 @@
     el.innerHTML=html; convo.appendChild(el); convo.scrollTop=convo.scrollHeight;
   }
   function addMay(text, ts){ if(empty)empty.remove(); const el=document.createElement('div'); el.className='msg may'; el.innerHTML='<span class="who">Nova <time class="stamp">'+fmtTime(ts)+'</time></span><div class="bubble"></div>'; el.querySelector('.bubble').textContent=text;
-    if(text && text.length>40){ const row=document.createElement('div'); row.className='docbtns'; row.innerHTML='<button class="docbtn" data-a="copy">⧉ Copy</button><button class="docbtn" data-a="html">⬇ HTML</button><button class="docbtn" data-f="docx">⬇ Word</button><button class="docbtn" data-f="pdf">⬇ PDF</button>'; row.querySelectorAll('.docbtn').forEach(b=>b.addEventListener('click',()=>{ if(b.dataset.a==='copy')copyText(text,b); else if(b.dataset.a==='html')downloadHtml(text); else downloadDoc(text,b.dataset.f); })); el.appendChild(row); }
+    if(text && text.length>40){ const row=document.createElement('div'); row.className='docbtns'; row.innerHTML='<button class="docbtn wa" data-a="wa">↗ WhatsApp</button><button class="docbtn" data-a="copy">⧉ Copy</button><button class="docbtn" data-a="html">⬇ HTML</button><button class="docbtn" data-f="docx">⬇ Word</button><button class="docbtn" data-f="pdf">⬇ PDF</button>'; row.querySelectorAll('.docbtn').forEach(b=>b.addEventListener('click',()=>{ if(b.dataset.a==='copy')copyText(text,b); else if(b.dataset.a==='html')downloadHtml(text); else if(b.dataset.a==='wa')sendWhatsApp(text); else downloadDoc(text,b.dataset.f); })); el.appendChild(row); }
     convo.appendChild(el); convo.scrollTop=convo.scrollHeight; return el.querySelector('.bubble'); }
 
   async function downloadDoc(text, format){
@@ -501,6 +503,12 @@
   }
 
   // copy reply text to clipboard, with brief feedback on the button
+  // open WhatsApp with the drafted text pre-filled; you pick the contact and send
+  function sendWhatsApp(text){
+    const url='https://wa.me/?text='+encodeURIComponent(text);
+    window.open(url,'_blank');
+  }
+
   async function copyText(text, btn){
     const label = btn ? btn.textContent : '';
     try{
