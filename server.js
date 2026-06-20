@@ -311,6 +311,11 @@ async function runTaskTool(name, input) {
   if (name === "add_task") return toolAddTask(input);
   if (name === "complete_task") return toolCompleteTask(input);
   if (name === "remove_task") return toolRemoveTask(input);
+  if (name === "add_calendar_event") {
+    const r = await createCalendarEvent(input || {});
+    if (r.ok) return "Added to your Google Calendar" + (r.invited && r.invited.length ? (" and invited " + r.invited.join(", ")) : "") + ".";
+    return "I couldn't add that to your calendar: " + r.error;
+  }
   return null;
 }
 
@@ -328,7 +333,11 @@ WEB: When a question needs current or factual info, use web search, then answer 
 
 LONG CONTENT: For something long like a full email draft, keep any preamble short (it gets read aloud) and put the substance in the body for the user to read on screen.
 
-DAILY CHECKLIST: The user has a real, saved checklist built into the app (the "Tasks" button). You can SEE today's checklist below when it exists, and you can MANAGE it with your tools: use add_task when they ask to add/note/remember a task (set daily=true for things they do every day), complete_task when they say something's done, and remove_task to delete one. After using a tool, confirm briefly and naturally in one sentence (e.g. "Added that to your checklist"). If they ask what's due, just tell them from the list below. Never write out checklists or HTML/code for tasks in chat.`;
+DAILY CHECKLIST: The user has a real, saved checklist built into the app (the "Tasks" button). You can SEE today's checklist below when it exists, and you can MANAGE it with your tools: use add_task when they ask to add/note/remember a task (set daily=true for things they do every day), complete_task when they say something's done, and remove_task to delete one. After using a tool, confirm briefly and naturally in one sentence (e.g. "Added that to your checklist"). If they ask what's due, just tell them from the list below. Never write out checklists or HTML/code for tasks in chat.
+
+CALENDAR: When Google Calendar is connected, you can add events with the add_calendar_event tool, and invite people by passing their email addresses as attendees (they get an invite automatically). Use it when the user asks to schedule, book, or set up a meeting/event at a specific time. Work out the exact date (YYYY-MM-DD) from words like "tomorrow" or "next Tuesday" using today's date, and always include the year. If they want to invite someone but haven't given an email, ask for it. Today's date is provided below. After adding, confirm in one short sentence. If a calendar action fails because it isn't connected, tell them to tap "Connect Google Calendar" in the Tasks panel.
+
+WHATSAPP: You can't read or send WhatsApp messages directly, but you're great at drafting replies. When the user wants to reply to someone on WhatsApp, write the message in their voice; a "Send on WhatsApp" button appears under your reply so they can send it themselves.`;
 
 // Main conversation endpoint — accepts full message history (text + image/document/text blocks).
 // Core chat pipeline, shared by /api/ask and the diagnostic /api/asktest.
@@ -339,6 +348,11 @@ async function generateReply(messages) {
       "\n\nWHAT YOU REMEMBER ABOUT THIS USER (from past conversations — use it naturally, don't recite it back):\n" +
       memory
     : PERSONA;
+
+  // Always tell Nova today's date (Johannesburg) and weekday, so she can resolve "tomorrow", "next Tuesday", etc.
+  const todayJ = todayStr();
+  const weekday = new Date(todayJ + "T12:00:00").toLocaleDateString("en-GB", { weekday: "long" });
+  system += "\n\nTODAY is " + weekday + ", " + todayJ + " (Africa/Johannesburg). Use this for any relative dates.";
 
   try {
     const tasks = (await loadTasks()).map(withStatus);
@@ -354,6 +368,22 @@ async function generateReply(messages) {
   const tools = [];
   if (process.env.NOVA_WEB_SEARCH !== "off") tools.push({ type: "web_search_20250305", name: "web_search", max_uses: 5 });
   tools.push(...TASK_TOOLS);
+  if (GOOGLE_ON) tools.push({
+    name: "add_calendar_event",
+    description: "Add an event to the user's Google Calendar, optionally inviting people by email (they receive an invite). Use when the user asks to schedule, book, or set up a meeting or event at a specific date and time. Always include the year in the date.",
+    input_schema: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "Short title of the event" },
+        date: { type: "string", description: "Event date as YYYY-MM-DD" },
+        time: { type: "string", description: "Start time in 24-hour HH:MM" },
+        durationMins: { type: "number", description: "Length in minutes (default 30)" },
+        attendees: { type: "string", description: "Comma-separated email addresses to invite (optional)" },
+        description: { type: "string", description: "Optional notes/agenda" },
+      },
+      required: ["title", "date", "time"],
+    },
+  });
 
   let convo = messages.slice();
   let reply = "";
@@ -669,6 +699,108 @@ app.get("/api/push/check", async (req, res) => {
   }
   if (changed) await saveTasks(list);
   res.json({ ok: true, nudged, time: hm });
+});
+
+// ---- Google Calendar integration ----
+const GOOGLE_CLIENT_ID = process.env.NOVA_GOOGLE_CLIENT_ID || "";
+const GOOGLE_CLIENT_SECRET = process.env.NOVA_GOOGLE_CLIENT_SECRET || "";
+const GOOGLE_REDIRECT = process.env.NOVA_GOOGLE_REDIRECT || "https://nova.naicker.cc/api/google/callback";
+const GOOGLE_ON = !!(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET);
+const G_AUTH = (process.env.GOOGLE_AUTH_BASE || "https://accounts.google.com") + "/o/oauth2/v2/auth";
+const G_TOKEN = (process.env.GOOGLE_OAUTH_BASE || "https://oauth2.googleapis.com") + "/token";
+const G_API = process.env.GOOGLE_API_BASE || "https://www.googleapis.com";
+const GKEY = process.env.NOVA_GOOGLE_KEY || "nova_google";
+const GCAL_SCOPE = "https://www.googleapis.com/auth/calendar.events";
+const TZONE = "Africa/Johannesburg";
+let googleCache = null;
+
+async function loadGoogle() {
+  if (UPSTASH_URL && UPSTASH_TOKEN) {
+    try { const j = await upstash(["GET", GKEY]); if (typeof j?.result === "string" && j.result) googleCache = JSON.parse(j.result); } catch (_) {}
+  }
+  return googleCache;
+}
+async function saveGoogle(obj) {
+  googleCache = obj;
+  if (UPSTASH_URL && UPSTASH_TOKEN) { try { await upstash(["SET", GKEY, JSON.stringify(obj)]); } catch (_) {} }
+  return obj;
+}
+async function googleAccessToken() {
+  const g = await loadGoogle();
+  if (!g || !g.refresh_token) return null;
+  if (g.access_token && g.expiry && Date.now() < g.expiry - 60000) return g.access_token;
+  const body = new URLSearchParams({ client_id: GOOGLE_CLIENT_ID, client_secret: GOOGLE_CLIENT_SECRET, refresh_token: g.refresh_token, grant_type: "refresh_token" });
+  const r = await fetch(G_TOKEN, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body });
+  const j = await r.json();
+  if (j.access_token) { g.access_token = j.access_token; g.expiry = Date.now() + (j.expires_in || 3600) * 1000; await saveGoogle(g); return g.access_token; }
+  return null;
+}
+
+app.get("/api/google/status", guard, async (_req, res) => {
+  const g = await loadGoogle();
+  res.json({ configured: GOOGLE_ON, connected: !!(g && g.refresh_token) });
+});
+
+app.get("/api/google/connect", (req, res) => {
+  if (!GOOGLE_ON) return res.status(400).send("Google Calendar isn't configured on the server yet.");
+  if (PASSCODE && (req.query.t || "") !== SESSION_TOKEN) return res.status(401).send("Locked.");
+  const u = new URL(G_AUTH);
+  u.searchParams.set("client_id", GOOGLE_CLIENT_ID);
+  u.searchParams.set("redirect_uri", GOOGLE_REDIRECT);
+  u.searchParams.set("response_type", "code");
+  u.searchParams.set("scope", GCAL_SCOPE);
+  u.searchParams.set("access_type", "offline");
+  u.searchParams.set("prompt", "consent");
+  u.searchParams.set("state", SESSION_TOKEN || "nostate");
+  res.redirect(u.toString());
+});
+
+app.get("/api/google/callback", async (req, res) => {
+  try {
+    if (PASSCODE && (req.query.state || "") !== SESSION_TOKEN) return res.status(401).send("State mismatch.");
+    const code = (req.query.code || "").toString();
+    if (!code) return res.redirect("/?gcal=error");
+    const body = new URLSearchParams({ code, client_id: GOOGLE_CLIENT_ID, client_secret: GOOGLE_CLIENT_SECRET, redirect_uri: GOOGLE_REDIRECT, grant_type: "authorization_code" });
+    const r = await fetch(G_TOKEN, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body });
+    const j = await r.json();
+    if (j.refresh_token) {
+      await saveGoogle({ refresh_token: j.refresh_token, access_token: j.access_token, expiry: Date.now() + (j.expires_in || 3600) * 1000 });
+    } else if (j.access_token) {
+      const g = (await loadGoogle()) || {}; g.access_token = j.access_token; g.expiry = Date.now() + (j.expires_in || 3600) * 1000; await saveGoogle(g);
+    } else {
+      return res.redirect("/?gcal=error");
+    }
+    res.redirect("/?gcal=connected");
+  } catch (e) { console.error(e); res.redirect("/?gcal=error"); }
+});
+
+async function createCalendarEvent({ title, date, time, durationMins, attendees, description }) {
+  const token = await googleAccessToken();
+  if (!token) return { ok: false, error: "Google Calendar isn't connected." };
+  if (!title || !date || !time) return { ok: false, error: "I need a title, date and time." };
+  const dur = Number(durationMins) || 30;
+  const [hh, mm] = time.split(":").map(Number);
+  const endMins = hh * 60 + mm + dur;
+  const eh = String(Math.floor(endMins / 60) % 24).padStart(2, "0"), em = String(endMins % 60).padStart(2, "0");
+  let atts = [];
+  if (Array.isArray(attendees)) atts = attendees;
+  else if (typeof attendees === "string" && attendees.trim()) atts = attendees.split(/[,;\s]+/).filter(Boolean);
+  const ev = {
+    summary: title, description: description || "",
+    start: { dateTime: date + "T" + time + ":00", timeZone: TZONE },
+    end: { dateTime: date + "T" + eh + ":" + em + ":00", timeZone: TZONE },
+  };
+  if (atts.length) ev.attendees = atts.map(e => ({ email: e }));
+  const r = await fetch(G_API + "/calendar/v3/calendars/primary/events?sendUpdates=all", {
+    method: "POST", headers: { authorization: "Bearer " + token, "content-type": "application/json" }, body: JSON.stringify(ev),
+  });
+  const j = await r.json();
+  if (j.id) return { ok: true, link: j.htmlLink, invited: atts };
+  return { ok: false, error: (j.error && j.error.message) || "Calendar API error." };
+}
+
+app.post("/api/calendar/add", guard, async (req, res) => {
+  res.json(await createCalendarEvent(req.body || {}));
 });
 
 const PORT = process.env.PORT || 3000;
