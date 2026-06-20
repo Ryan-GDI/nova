@@ -312,6 +312,10 @@
       <span id="notifyStatus">Get phone nudges that repeat until a task is done.</span>
       <button class="task-addbtn" id="notifyBtn">Enable notifications</button>
     </div>
+    <div class="task-notify" id="taskGcal">
+      <span id="gcalStatus">Let Nova add events to your Google Calendar and invite people.</span>
+      <button class="task-addbtn" id="gcalBtn">Connect Google Calendar</button>
+    </div>
     <div class="mem-row">
       <button class="mem-close" id="taskClose">Close</button>
     </div>
@@ -808,6 +812,27 @@
     }catch(e){ notifyStatus.textContent='Could not enable notifications here. On iPhone, make sure Nova is added to your Home Screen.'; notifyBtn.disabled=false; }
   }
   if(notifyBtn){ notifyBtn.addEventListener('click',enableNotifications); refreshNotifyUI(); }
+
+  // ---- Google Calendar ----
+  const gcalBtn=$('gcalBtn'), gcalStatus=$('gcalStatus'), taskGcal=$('taskGcal');
+  async function refreshGcal(){
+    try{
+      const r=await api('/api/google/status'); const j=await r.json();
+      if(!j.configured){ gcalStatus.textContent='Google Calendar isn\u2019t set up on the server yet.'; gcalBtn.style.display='none'; return; }
+      if(j.connected){ taskGcal.classList.add('on'); gcalStatus.textContent='Google Calendar connected. ✓ Ask Nova to schedule anything.'; gcalBtn.style.display='none'; }
+      else { taskGcal.classList.remove('on'); gcalBtn.style.display=''; gcalBtn.textContent='Connect Google Calendar'; }
+    }catch(_){}
+  }
+  if(gcalBtn){
+    gcalBtn.addEventListener('click',()=>{ window.location.href='/api/google/connect?t='+encodeURIComponent(AUTH.token||''); });
+    refreshGcal();
+  }
+  // handle return from Google consent
+  (function(){
+    const p=new URLSearchParams(location.search);
+    if(p.get('gcal')==='connected'){ try{ refreshTasks(true); }catch(_){}; setTimeout(refreshGcal,300); history.replaceState({},'',location.pathname); }
+    else if(p.get('gcal')==='error'){ alert('Google Calendar connection didn\u2019t complete. Please try Connect again.'); history.replaceState({},'',location.pathname); }
+  })();
 
   // ---- restore the previous conversation on load ----
   (function restore(){
