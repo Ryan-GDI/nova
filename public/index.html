@@ -164,6 +164,9 @@
   .mem-clear{ background:rgba(200,136,29,.12); color:var(--warm-deep); border:1px solid rgba(200,136,29,.35)!important; }
   .mem-chat{ background:rgba(20,40,80,.06); color:var(--text); }
   .mem-close{ background:transparent!important; color:var(--dim); margin-left:auto; }
+  .voice-label{ display:block; font-family:"Space Mono",monospace; font-size:10px; letter-spacing:1.5px; text-transform:uppercase; color:var(--dim); margin:14px 0 6px; }
+  .voice-select{ width:100%; padding:11px 12px; border:1px solid var(--line); border-radius:12px; font-family:"DM Sans",sans-serif; font-size:14px; color:var(--text); background:#fff; outline:none; }
+  .voice-range{ width:100%; accent-color:var(--cool); }
   /* tasks panel */
   .task-card{ max-width:520px; }
   .task-add{ display:flex; gap:8px; align-items:center; margin-bottom:14px; flex-wrap:wrap; }
@@ -230,6 +233,10 @@
     <button class="memorybtn" id="memoryBtn" title="What Nova remembers">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44A2.5 2.5 0 0 1 4 17.5 2.5 2.5 0 0 1 2.5 13 2.5 2.5 0 0 1 4 8.5 2.5 2.5 0 0 1 6.04 4.5 2.5 2.5 0 0 1 9.5 2z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44A2.5 2.5 0 0 0 20 17.5 2.5 2.5 0 0 0 21.5 13 2.5 2.5 0 0 0 20 8.5 2.5 2.5 0 0 0 17.96 4.5 2.5 2.5 0 0 0 14.5 2z"/></svg>
       <span>memory</span>
+    </button>
+    <button class="memorybtn" id="voiceBtn" title="Nova's voice">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a9 9 0 0 1 0 14"/></svg>
+      <span>voice</span>
     </button>
   </header>
   <div class="stage" id="stage">
@@ -333,6 +340,22 @@
       <button class="mem-clear" id="memClear">Clear memory</button>
       <button class="mem-chat" id="memChat">Clear chat</button>
       <button class="mem-close" id="memClose">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- voice panel -->
+<div class="cam" id="voiceModal">
+  <div class="cam-card mem-card">
+    <div class="mem-h">Nova's voice</div>
+    <div class="mem-sub">Pick from the voices on your device. For richer voices on iPhone: Settings → Accessibility → Spoken Content → Voices → English, then download a <b>Premium</b> or <b>Siri</b> voice — it'll appear here.</div>
+    <label class="voice-label">Voice</label>
+    <select id="voiceSelect" class="voice-select"></select>
+    <label class="voice-label">Speed <span id="rateVal">1.0×</span></label>
+    <input id="voiceRate" type="range" min="0.7" max="1.3" step="0.05" value="1.02" class="voice-range" />
+    <div class="mem-row">
+      <button class="mem-save" id="voiceTest">▶ Test voice</button>
+      <button class="mem-close" id="voiceClose">Close</button>
     </div>
   </div>
 </div>
@@ -491,8 +514,10 @@
     html+= (text?text:'') + '</div>';
     el.innerHTML=html; convo.appendChild(el); convo.scrollTop=convo.scrollHeight;
   }
-  function addMay(text, ts){ if(empty)empty.remove(); const el=document.createElement('div'); el.className='msg may'; el.innerHTML='<span class="who">Nova <time class="stamp">'+fmtTime(ts)+'</time></span><div class="bubble"></div>'; el.querySelector('.bubble').textContent=text;
-    if(text && text.length>40){ const row=document.createElement('div'); row.className='docbtns'; row.innerHTML='<button class="docbtn wa" data-a="wa">↗ WhatsApp</button><button class="docbtn" data-a="copy">⧉ Copy</button><button class="docbtn" data-a="html">⬇ HTML</button><button class="docbtn" data-f="docx">⬇ Word</button><button class="docbtn" data-f="pdf">⬇ PDF</button>'; row.querySelectorAll('.docbtn').forEach(b=>b.addEventListener('click',()=>{ if(b.dataset.a==='copy')copyText(text,b); else if(b.dataset.a==='html')downloadHtml(text); else if(b.dataset.a==='wa')sendWhatsApp(text); else downloadDoc(text,b.dataset.f); })); el.appendChild(row); }
+  function stripSendMarkers(t){ return (t||'').replace(/\[\[\/?SEND\]\]/g,'').replace(/\n{3,}/g,'\n\n').trim(); }
+  function extractSendable(t){ const m=(t||'').match(/\[\[SEND\]\]([\s\S]*?)\[\[\/SEND\]\]/); return (m ? m[1] : stripSendMarkers(t)).trim(); }
+  function addMay(text, ts){ if(empty)empty.remove(); const disp=stripSendMarkers(text); const el=document.createElement('div'); el.className='msg may'; el.innerHTML='<span class="who">Nova <time class="stamp">'+fmtTime(ts)+'</time></span><div class="bubble"></div>'; el.querySelector('.bubble').textContent=disp;
+    if(disp && disp.length>40){ const row=document.createElement('div'); row.className='docbtns'; row.innerHTML='<button class="docbtn wa" data-a="wa">↗ WhatsApp</button><button class="docbtn" data-a="copy">⧉ Copy</button><button class="docbtn" data-a="html">⬇ HTML</button><button class="docbtn" data-f="docx">⬇ Word</button><button class="docbtn" data-f="pdf">⬇ PDF</button>'; row.querySelectorAll('.docbtn').forEach(b=>b.addEventListener('click',()=>{ if(b.dataset.a==='copy')copyText(extractSendable(text),b); else if(b.dataset.a==='html')downloadHtml(disp); else if(b.dataset.a==='wa')sendWhatsApp(extractSendable(text)); else downloadDoc(disp,b.dataset.f); })); el.appendChild(row); }
     convo.appendChild(el); convo.scrollTop=convo.scrollHeight; return el.querySelector('.bubble'); }
 
   async function downloadDoc(text, format){
@@ -539,10 +564,34 @@
 
   // ---- voice out ----
   let voice=null;
-  function pickVoice(){ const vs=speechSynthesis.getVoices(); if(!vs.length)return; const pref=['Samantha','Google UK English Female','Microsoft Aria','Microsoft Zira','Google US English']; voice=vs.find(v=>pref.includes(v.name))||vs.find(v=>/female/i.test(v.name))||vs.find(v=>/en[-_]/i.test(v.lang))||vs[0]; }
-  if('speechSynthesis' in window){ pickVoice(); speechSynthesis.onvoiceschanged=pickVoice; }
+  let voiceName = localStorage.getItem('nova_voice') || '';
+  let voiceRate = parseFloat(localStorage.getItem('nova_rate')||'1.02') || 1.02;
+  function listVoices(){ const vs=speechSynthesis.getVoices(); const en=vs.filter(v=>/en[-_]/i.test(v.lang)); return en.length?en:vs; }
+  function pickVoice(){
+    const vs=speechSynthesis.getVoices(); if(!vs.length)return;
+    if(voiceName){ const saved=vs.find(v=>v.name===voiceName); if(saved){ voice=saved; return; } }
+    const pref=['Samantha','Google UK English Female','Microsoft Aria','Microsoft Zira','Google US English'];
+    voice=vs.find(v=>pref.includes(v.name))||vs.find(v=>/female/i.test(v.name))||vs.find(v=>/en[-_]/i.test(v.lang))||vs[0];
+  }
+  function populateVoiceSelect(){
+    const sel=$('voiceSelect'); if(!sel) return;
+    const vs=listVoices(); if(!vs.length) return;
+    sel.innerHTML='';
+    vs.forEach(v=>{ const o=document.createElement('option'); o.value=v.name; o.textContent=v.name+' · '+v.lang; if(voice && v.name===voice.name)o.selected=true; sel.appendChild(o); });
+  }
+  if('speechSynthesis' in window){ pickVoice(); populateVoiceSelect(); speechSynthesis.onvoiceschanged=()=>{ pickVoice(); populateVoiceSelect(); }; }
   function speakable(t){ if(t.length<=700) return t; const cut=t.slice(0,640); const m=cut.match(/[\s\S]*[.!?](\s|$)/); return (m?m[0]:cut).trim()+' I\'ve put the full text on screen for you.'; }
-  function speak(text){ if(!('speechSynthesis' in window)){ setState(null); return; } speechSynthesis.cancel(); const u=new SpeechSynthesisUtterance(speakable(text)); if(voice)u.voice=voice; u.rate=1.02; u.pitch=1.05; u.onstart=()=>setState('speaking'); u.onend=()=>{ setState(null); if(wakeOn && !busy && !listening) setTimeout(startWake,200); }; speechSynthesis.speak(u); }
+  function speak(text){ if(!('speechSynthesis' in window)){ setState(null); return; } speechSynthesis.cancel(); const u=new SpeechSynthesisUtterance(speakable(text)); if(voice)u.voice=voice; u.rate=voiceRate; u.pitch=1.05; u.onstart=()=>setState('speaking'); u.onend=()=>{ setState(null); if(wakeOn && !busy && !listening) setTimeout(startWake,200); }; speechSynthesis.speak(u); }
+
+  // voice picker modal
+  const voiceBtn=$('voiceBtn'), voiceModal=$('voiceModal');
+  if(voiceBtn){
+    voiceBtn.addEventListener('click',()=>{ populateVoiceSelect(); const r=$('voiceRate'); if(r){ r.value=voiceRate; } const rv=$('rateVal'); if(rv) rv.textContent=voiceRate.toFixed(2)+'×'; voiceModal.classList.add('open'); });
+    const vc=$('voiceClose'); if(vc) vc.addEventListener('click',()=>voiceModal.classList.remove('open'));
+    const vs2=$('voiceSelect'); if(vs2) vs2.addEventListener('change',(e)=>{ voiceName=e.target.value; localStorage.setItem('nova_voice',voiceName); pickVoice(); });
+    const vr=$('voiceRate'); if(vr) vr.addEventListener('input',(e)=>{ voiceRate=parseFloat(e.target.value)||1.02; const rv=$('rateVal'); if(rv) rv.textContent=voiceRate.toFixed(2)+'×'; localStorage.setItem('nova_rate',String(voiceRate)); });
+    const vt=$('voiceTest'); if(vt) vt.addEventListener('click',()=>{ speak("Hi, I'm Nova. This is how I sound — you can change my voice and speed right here."); });
+  }
 
   // ---- ask ----
   async function ask(userText){
@@ -576,7 +625,7 @@
       const data=await res.json();
       const reply=(data.reply||data.error||"Sorry, I didn't catch that.").trim();
       const rts=Date.now();
-      thinkEl.remove(); addMay(reply, rts); history.push({role:'assistant',content:reply,ts:rts}); save(); speak(reply);
+      thinkEl.remove(); addMay(reply, rts); history.push({role:'assistant',content:reply,ts:rts}); save(); speak(stripSendMarkers(reply));
       if(data.tasksChanged){ try{ refreshTasks(false); }catch(_){} }
       updateMemory(text, reply);
     }catch(err){
@@ -631,6 +680,8 @@
   // ---- voice in ----
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
   let recog=null, listening=false;
+  let dictating=false, finishing=false, dictFinal='', silenceTimer=null;
+  const SILENCE_MS=5000;  // how long Nova keeps listening through a pause before she sends
   // wake-word state
   let wakeOn=false, wakeRecog=null, wakeActive=false;
   const wakeBtn=$('wakeBtn');
@@ -640,19 +691,34 @@
     if(!wakeOn || !wakeRecog || wakeActive || busy) return;
     try{ wakeRecog.start(); }catch(_){}
   }
-  function captureCommand(){
-    if(!recog) return;
-    setState('listening');
+  function clearSilence(){ if(silenceTimer){ clearTimeout(silenceTimer); silenceTimer=null; } }
+  function armSilence(){ clearSilence(); silenceTimer=setTimeout(()=>finishDictation(true), SILENCE_MS); }
+  function startDictation(){
+    if(busy || !recog) return;
+    if('speechSynthesis' in window) speechSynthesis.cancel();
+    if(wakeOn){ try{ wakeRecog.stop(); }catch(_){} }
+    dictFinal=''; dictating=true; finishing=false; input.value='';
     try{ recog.start(); }catch(_){}
+    armSilence();
   }
+  function finishDictation(doSend){
+    if(finishing) return;
+    finishing=true; dictating=false; clearSilence();
+    try{ recog.stop(); }catch(_){}
+    const said=(dictFinal||input.value||'').replace(/\s+/g,' ').trim();
+    if(doSend && said){ input.value=''; ask(said); }
+    else { if(!busy) setState(null); if(wakeOn && !busy) startWake(); }
+    setTimeout(()=>{ finishing=false; dictFinal=''; }, 60);
+  }
+  function captureCommand(){ if(!recog) return; dictFinal=''; dictating=true; finishing=false; input.value=''; setState('listening'); try{ recog.start(); }catch(_){} armSilence(); }
 
   if(SR){
-    recog=new SR(); recog.lang='en-US'; recog.interimResults=true; recog.continuous=false;
+    recog=new SR(); recog.lang='en-US'; recog.interimResults=true; recog.continuous=true;
     recog.onstart=()=>{ listening=true; micBtn.classList.add('live'); setState('listening'); };
-    recog.onerror=(e)=>{ listening=false; micBtn.classList.remove('live'); setState(null); if(e.error==='not-allowed'||e.error==='service-not-allowed'){ note.innerHTML="I couldn't get mic access. You can still <b>type to me</b> below."; } };
-    recog.onend=()=>{ listening=false; micBtn.classList.remove('live'); if(!busy)setState(null); if(wakeOn && !busy) startWake(); };
-    recog.onresult=(e)=>{ let final=''; for(let i=e.resultIndex;i<e.results.length;i++){ if(e.results[i].isFinal)final+=e.results[i][0].transcript; } if(final.trim()){ ask(final.trim()); } };
-    micBtn.addEventListener('click',()=>{ if(busy)return; if('speechSynthesis' in window)speechSynthesis.cancel(); if(listening){ recog.stop(); return; } try{ recog.start(); }catch(_){} });
+    recog.onerror=(e)=>{ clearSilence(); listening=false; dictating=false; finishing=false; micBtn.classList.remove('live'); setState(null); if(e.error==='not-allowed'||e.error==='service-not-allowed'){ note.innerHTML="I couldn't get mic access. You can still <b>type to me</b> below."; } };
+    recog.onend=()=>{ listening=false; micBtn.classList.remove('live'); if(dictating && !finishing){ try{ recog.start(); return; }catch(_){ dictating=false; } } if(!busy)setState(null); if(wakeOn && !busy && !finishing) startWake(); };
+    recog.onresult=(e)=>{ let interim=''; for(let i=e.resultIndex;i<e.results.length;i++){ const tr=e.results[i][0].transcript; if(e.results[i].isFinal) dictFinal+=tr+' '; else interim+=tr; } input.value=(dictFinal+interim).replace(/\s+/g,' ').trimStart(); armSilence(); };
+    micBtn.addEventListener('click',()=>{ if(busy)return; if(dictating){ finishDictation(true); } else { startDictation(); } });
 
     // background wake-word listener (separate continuous recogniser)
     wakeRecog=new SR(); wakeRecog.lang='en-US'; wakeRecog.interimResults=true; wakeRecog.continuous=true;
