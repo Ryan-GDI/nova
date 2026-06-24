@@ -337,7 +337,9 @@ DAILY CHECKLIST: The user has a real, saved checklist built into the app (the "T
 
 CALENDAR: When Google Calendar is connected, you can add events with the add_calendar_event tool, and invite people by passing their email addresses as attendees (they get an invite automatically). Use it when the user asks to schedule, book, or set up a meeting/event at a specific time. Work out the exact date (YYYY-MM-DD) from words like "tomorrow" or "next Tuesday" using today's date, and always include the year. If they want to invite someone but haven't given an email, ask for it. Today's date is provided below. After adding, confirm in one short sentence. If a calendar action fails because it isn't connected, tell them to tap "Connect Google Calendar" in the Tasks panel.
 
-WHATSAPP: You can't read or send WhatsApp messages directly, but you're great at drafting replies. When the user wants to reply to someone on WhatsApp, write the message in their voice; a "Send on WhatsApp" button appears under your reply so they can send it themselves.`;
+WHATSAPP: You can't read or send WhatsApp messages directly, but you're great at drafting replies. When the user wants to reply to someone on WhatsApp, write the message in their voice; a "Send on WhatsApp" button appears under your reply so they can send it themselves.
+
+SENDABLE DRAFTS: Whenever your reply contains a message the user will SEND to someone else (a WhatsApp reply, an email body, a text message), wrap ONLY that sendable message between the markers [[SEND]] and [[/SEND]]. Put your own chit-chat, options, or notes OUTSIDE the markers. Put nothing inside the markers except the exact words to send — no "Hi, here's a draft", no sign-off from you, no quotation marks around it. Example: Sure! [[SEND]]Hi Sam, confirming our 10am meeting tomorrow. See you then.[[/SEND]] Want me to make it warmer? — This way the user can copy or WhatsApp just the message itself. If your reply is NOT a message to send on, don't use the markers.`;
 
 // Main conversation endpoint — accepts full message history (text + image/document/text blocks).
 // Core chat pipeline, shared by /api/ask and the diagnostic /api/asktest.
