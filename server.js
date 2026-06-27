@@ -104,8 +104,9 @@ function buildPdf(body) {
 }
 
 const API_KEY = process.env.ANTHROPIC_API_KEY;
-const MODEL = process.env.MAY_MODEL || "claude-sonnet-4-6";
+const MODEL = process.env.MAY_MODEL || "claude-haiku-4-5-20251001";
 const MEMORY_MODEL = process.env.MAY_MEMORY_MODEL || MODEL; // model that maintains long-term memory
+const MAX_MSGS = parseInt(process.env.NOVA_MAX_MSGS || "20", 10); // cap recent turns sent to the API to control cost
 const ANTHROPIC_URL = process.env.ANTHROPIC_BASE_URL || "https://api.anthropic.com/v1/messages";
 
 // Call Anthropic with a hard timeout so a slow/stalled request can never hang the server.
@@ -387,7 +388,7 @@ async function generateReply(messages) {
     },
   });
 
-  let convo = messages.slice();
+  let convo = messages.slice(-MAX_MSGS);
   let reply = "";
   let tasksChanged = false;
   let lastStop = "";
