@@ -86,6 +86,8 @@
   .docbtn.ok{ background:rgba(35,120,80,.14); border-color:rgba(35,120,80,.4); color:#237850; }
   .docbtn.wa{ background:rgba(37,211,102,.12); border-color:rgba(18,140,80,.4); color:#128c50; }
   .docbtn.wa:hover{ background:rgba(37,211,102,.22); }
+  .docbtn.call{ background:rgba(30,58,107,.1); border-color:rgba(30,58,107,.4); color:var(--cool); }
+  .docbtn.mail{ background:rgba(200,136,29,.12); border-color:rgba(200,136,29,.4); color:#a06b14; }
   .bubble .atts { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; justify-content:flex-end; }
   .att-thumb { width:46px; height:46px; border-radius:8px; object-fit:cover; border:1px solid rgba(255,255,255,.4); }
   .att-file { display:inline-flex; align-items:center; gap:6px; background:rgba(255,255,255,.18); border:1px solid rgba(255,255,255,.35); border-radius:8px; padding:5px 9px; font-size:12px; color:#fff; }
@@ -172,6 +174,13 @@
   .contact-add input{ padding:11px 12px; border:1px solid var(--line); border-radius:12px; font-family:"DM Sans",sans-serif; font-size:14px; color:var(--text); background:#fff; outline:none; }
   .contact-list{ display:flex; flex-direction:column; gap:8px; max-height:38vh; overflow:auto; }
   .contact-item{ display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--line); border-radius:12px; }
+  .contact-card{ display:block; }
+  .contact-card .ci-top{ display:flex; align-items:center; gap:10px; }
+  .ci-acts{ display:flex; gap:7px; flex-wrap:wrap; margin-top:9px; }
+  .ci-act{ text-decoration:none; font-family:"DM Sans",sans-serif; font-size:12px; font-weight:600; padding:6px 11px; border-radius:9px; border:1px solid var(--line); }
+  .ci-act.call{ background:rgba(30,58,107,.1); border-color:rgba(30,58,107,.35); color:var(--cool); }
+  .ci-act.wa{ background:rgba(37,211,102,.12); border-color:rgba(18,140,80,.4); color:#128c50; }
+  .ci-act.mail{ background:rgba(200,136,29,.12); border-color:rgba(200,136,29,.4); color:#a06b14; }
   .contact-item .ci-name{ font-weight:600; font-size:14px; }
   .contact-item .ci-meta{ font-size:11.5px; color:var(--dim); }
   .contact-item .ci-del{ margin-left:auto; background:transparent; border:none; color:var(--dim); font-size:18px; cursor:pointer; }
@@ -546,11 +555,30 @@
     html+= (text?text:'') + '</div>';
     el.innerHTML=html; convo.appendChild(el); convo.scrollTop=convo.scrollHeight;
   }
-  function stripSendMarkers(t){ return (t||'').replace(/\[\[SEND(?:\s+to=[^\]]*)?\]\]/g,'').replace(/\[\[\/SEND\]\]/g,'').replace(/\n{3,}/g,'\n\n').trim(); }
+  function stripSendMarkers(t){ return (t||'').replace(/\[\[SEND(?:\s+to=[^\]]*)?\]\]/g,'').replace(/\[\[\/SEND\]\]/g,'').replace(/\[\[EMAIL[^\]]*\]\]/g,'').replace(/\[\[\/EMAIL\]\]/g,'').replace(/\[\[CALL[^\]]*\]\]/g,'').replace(/\n{3,}/g,'\n\n').trim(); }
   function parseSend(t){ const m=(t||'').match(/\[\[SEND(?:\s+to=([^\]]*))?\]\]([\s\S]*?)\[\[\/SEND\]\]/); if(m) return { to:(m[1]||'').trim(), body:m[2].trim() }; return { to:'', body:stripSendMarkers(t).trim() }; }
+  function parseEmail(t){ const m=(t||'').match(/\[\[EMAIL([^\]]*)\]\]([\s\S]*?)\[\[\/EMAIL\]\]/); if(!m) return null; const a=m[1]||''; const to=(a.match(/to=([^|\]]+)/)||[])[1]||''; const subject=(a.match(/subject=([^|\]]+)/)||[])[1]||''; return { to:to.trim(), subject:subject.trim(), body:m[2].trim() }; }
+  function parseCall(t){ const m=(t||'').match(/\[\[CALL(?:\s+to=([^\]]*))?\]\]/); return m ? (m[1]||'').trim() : ''; }
+  function openEmail(to, subject, body){ const p=[]; if(subject)p.push('subject='+encodeURIComponent(subject)); if(body)p.push('body='+encodeURIComponent(body)); window.location.href='mailto:'+(to||'')+(p.length?('?'+p.join('&')):''); }
+  function callNumber(num){ const n=(num||'').replace(/[^\d+]/g,''); if(n) window.location.href='tel:'+n; }
   function extractSendable(t){ return parseSend(t).body; }
   function addMay(text, ts){ if(empty)empty.remove(); const disp=stripSendMarkers(text); const el=document.createElement('div'); el.className='msg may'; el.innerHTML='<span class="who">Nova <time class="stamp">'+fmtTime(ts)+'</time></span><div class="bubble"></div>'; el.querySelector('.bubble').textContent=disp;
-    if(disp && disp.length>40){ const row=document.createElement('div'); row.className='docbtns'; row.innerHTML='<button class="docbtn wa" data-a="wa">↗ WhatsApp</button><button class="docbtn" data-a="copy">⧉ Copy</button><button class="docbtn" data-a="html">⬇ HTML</button><button class="docbtn" data-f="docx">⬇ Word</button><button class="docbtn" data-f="pdf">⬇ PDF</button>'; row.querySelectorAll('.docbtn').forEach(b=>b.addEventListener('click',()=>{ if(b.dataset.a==='copy')copyText(extractSendable(text),b); else if(b.dataset.a==='html')downloadHtml(disp); else if(b.dataset.a==='wa'){ const s=parseSend(text); sendWhatsApp(s.body, s.to); } else downloadDoc(disp,b.dataset.f); })); el.appendChild(row); }
+    const em=parseEmail(text), callNum=parseCall(text);
+    if((disp && disp.length>40) || em || callNum){ const row=document.createElement('div'); row.className='docbtns';
+      let btns='';
+      if(callNum) btns+='<button class="docbtn call" data-a="call">📞 Call</button>';
+      btns+='<button class="docbtn wa" data-a="wa">↗ WhatsApp</button>';
+      if(em) btns+='<button class="docbtn mail" data-a="email">✉ Email</button>';
+      btns+='<button class="docbtn" data-a="copy">⧉ Copy</button><button class="docbtn" data-a="html">⬇ HTML</button><button class="docbtn" data-f="docx">⬇ Word</button><button class="docbtn" data-f="pdf">⬇ PDF</button>';
+      row.innerHTML=btns;
+      row.querySelectorAll('.docbtn').forEach(b=>b.addEventListener('click',()=>{
+        if(b.dataset.a==='copy')copyText(em?em.body:extractSendable(text),b);
+        else if(b.dataset.a==='html')downloadHtml(disp);
+        else if(b.dataset.a==='wa'){ const s=parseSend(text); sendWhatsApp(s.body, s.to); }
+        else if(b.dataset.a==='email'){ openEmail(em.to, em.subject, em.body); }
+        else if(b.dataset.a==='call'){ callNumber(callNum); }
+        else downloadDoc(disp,b.dataset.f);
+      })); el.appendChild(row); }
     convo.appendChild(el); convo.scrollTop=convo.scrollHeight; return el.querySelector('.bubble'); }
 
   async function downloadDoc(text, format){
@@ -634,9 +662,14 @@
     try{ const r=await api('/api/contacts'); const j=await r.json(); const list=j.contacts||[];
       if(!list.length){ contactList.innerHTML='<div class="contact-empty">No people yet. Add someone above.</div>'; return; }
       contactList.innerHTML='';
-      list.forEach(c=>{ const row=document.createElement('div'); row.className='contact-item';
+      list.forEach(c=>{ const row=document.createElement('div'); row.className='contact-item contact-card';
         const meta=[c.email,c.phone].filter(Boolean).join('  ·  ');
-        row.innerHTML='<div><div class="ci-name"></div><div class="ci-meta"></div></div><button class="ci-del" title="Remove">×</button>';
+        const num=(c.phone||'').replace(/[^\d+]/g,''); const waNum=(c.phone||'').replace(/[^\d]/g,'');
+        let acts='';
+        if(num) acts+='<a class="ci-act call" href="tel:'+num+'">📞 Call</a>';
+        if(waNum) acts+='<a class="ci-act wa" href="https://wa.me/'+waNum+'" target="_blank" rel="noopener">↗ WhatsApp</a>';
+        if(c.email) acts+='<a class="ci-act mail" href="mailto:'+c.email+'">✉ Email</a>';
+        row.innerHTML='<div class="ci-top"><div><div class="ci-name"></div><div class="ci-meta"></div></div><button class="ci-del" title="Remove">×</button></div>'+(acts?'<div class="ci-acts">'+acts+'</div>':'');
         row.querySelector('.ci-name').textContent=c.name; row.querySelector('.ci-meta').textContent=meta;
         row.querySelector('.ci-del').addEventListener('click',async()=>{ await api('/api/contacts/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:c.id})}); refreshContacts(); });
         contactList.appendChild(row); });
