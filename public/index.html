@@ -167,6 +167,15 @@
   .voice-label{ display:block; font-family:"Space Mono",monospace; font-size:10px; letter-spacing:1.5px; text-transform:uppercase; color:var(--dim); margin:14px 0 6px; }
   .voice-select{ width:100%; padding:11px 12px; border:1px solid var(--line); border-radius:12px; font-family:"DM Sans",sans-serif; font-size:14px; color:var(--text); background:#fff; outline:none; }
   .voice-range{ width:100%; accent-color:var(--cool); }
+  .brief-toggle{ display:flex; align-items:center; gap:8px; margin-top:16px; font-family:"DM Sans",sans-serif; font-size:13px; color:var(--text); cursor:pointer; }
+  .contact-add{ display:flex; flex-direction:column; gap:8px; margin:6px 0 14px; }
+  .contact-add input{ padding:11px 12px; border:1px solid var(--line); border-radius:12px; font-family:"DM Sans",sans-serif; font-size:14px; color:var(--text); background:#fff; outline:none; }
+  .contact-list{ display:flex; flex-direction:column; gap:8px; max-height:38vh; overflow:auto; }
+  .contact-item{ display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--line); border-radius:12px; }
+  .contact-item .ci-name{ font-weight:600; font-size:14px; }
+  .contact-item .ci-meta{ font-size:11.5px; color:var(--dim); }
+  .contact-item .ci-del{ margin-left:auto; background:transparent; border:none; color:var(--dim); font-size:18px; cursor:pointer; }
+  .contact-empty{ text-align:center; color:var(--dim); font-family:"Fraunces",serif; font-style:italic; padding:14px 0; }
   /* tasks panel */
   .task-card{ max-width:520px; }
   .task-add{ display:flex; gap:8px; align-items:center; margin-bottom:14px; flex-wrap:wrap; }
@@ -233,6 +242,10 @@
     <button class="memorybtn" id="memoryBtn" title="What Nova remembers">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44A2.5 2.5 0 0 1 4 17.5 2.5 2.5 0 0 1 2.5 13 2.5 2.5 0 0 1 4 8.5 2.5 2.5 0 0 1 6.04 4.5 2.5 2.5 0 0 1 9.5 2z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44A2.5 2.5 0 0 0 20 17.5 2.5 2.5 0 0 0 21.5 13 2.5 2.5 0 0 0 20 8.5 2.5 2.5 0 0 0 17.96 4.5 2.5 2.5 0 0 0 14.5 2z"/></svg>
       <span>memory</span>
+    </button>
+    <button class="memorybtn" id="peopleBtn" title="Your contacts">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      <span>people</span>
     </button>
     <button class="memorybtn" id="voiceBtn" title="Nova's voice">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a9 9 0 0 1 0 14"/></svg>
@@ -353,9 +366,28 @@
     <select id="voiceSelect" class="voice-select"></select>
     <label class="voice-label">Speed <span id="rateVal">1.0×</span></label>
     <input id="voiceRate" type="range" min="0.7" max="1.3" step="0.05" value="1.02" class="voice-range" />
+    <label class="brief-toggle"><input type="checkbox" id="briefToggle" /> Greet me with a morning briefing when I open Nova</label>
     <div class="mem-row">
       <button class="mem-save" id="voiceTest">▶ Test voice</button>
       <button class="mem-close" id="voiceClose">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- contacts panel -->
+<div class="cam" id="peopleModal">
+  <div class="cam-card mem-card">
+    <div class="mem-h">Your people</div>
+    <div class="mem-sub">Save people you deal with, then just say "invite John" or "WhatsApp Sam" — Nova fills in the email or number for you.</div>
+    <div class="contact-add">
+      <input id="cName" type="text" placeholder="Name" />
+      <input id="cEmail" type="email" placeholder="Email (for calendar invites)" />
+      <input id="cPhone" type="tel" placeholder="WhatsApp number e.g. +27821234567" />
+      <button class="task-addbtn" id="cAdd">Add person</button>
+    </div>
+    <div class="contact-list" id="contactList"></div>
+    <div class="mem-row">
+      <button class="mem-close" id="peopleClose">Close</button>
     </div>
   </div>
 </div>
@@ -514,10 +546,11 @@
     html+= (text?text:'') + '</div>';
     el.innerHTML=html; convo.appendChild(el); convo.scrollTop=convo.scrollHeight;
   }
-  function stripSendMarkers(t){ return (t||'').replace(/\[\[\/?SEND\]\]/g,'').replace(/\n{3,}/g,'\n\n').trim(); }
-  function extractSendable(t){ const m=(t||'').match(/\[\[SEND\]\]([\s\S]*?)\[\[\/SEND\]\]/); return (m ? m[1] : stripSendMarkers(t)).trim(); }
+  function stripSendMarkers(t){ return (t||'').replace(/\[\[SEND(?:\s+to=[^\]]*)?\]\]/g,'').replace(/\[\[\/SEND\]\]/g,'').replace(/\n{3,}/g,'\n\n').trim(); }
+  function parseSend(t){ const m=(t||'').match(/\[\[SEND(?:\s+to=([^\]]*))?\]\]([\s\S]*?)\[\[\/SEND\]\]/); if(m) return { to:(m[1]||'').trim(), body:m[2].trim() }; return { to:'', body:stripSendMarkers(t).trim() }; }
+  function extractSendable(t){ return parseSend(t).body; }
   function addMay(text, ts){ if(empty)empty.remove(); const disp=stripSendMarkers(text); const el=document.createElement('div'); el.className='msg may'; el.innerHTML='<span class="who">Nova <time class="stamp">'+fmtTime(ts)+'</time></span><div class="bubble"></div>'; el.querySelector('.bubble').textContent=disp;
-    if(disp && disp.length>40){ const row=document.createElement('div'); row.className='docbtns'; row.innerHTML='<button class="docbtn wa" data-a="wa">↗ WhatsApp</button><button class="docbtn" data-a="copy">⧉ Copy</button><button class="docbtn" data-a="html">⬇ HTML</button><button class="docbtn" data-f="docx">⬇ Word</button><button class="docbtn" data-f="pdf">⬇ PDF</button>'; row.querySelectorAll('.docbtn').forEach(b=>b.addEventListener('click',()=>{ if(b.dataset.a==='copy')copyText(extractSendable(text),b); else if(b.dataset.a==='html')downloadHtml(disp); else if(b.dataset.a==='wa')sendWhatsApp(extractSendable(text)); else downloadDoc(disp,b.dataset.f); })); el.appendChild(row); }
+    if(disp && disp.length>40){ const row=document.createElement('div'); row.className='docbtns'; row.innerHTML='<button class="docbtn wa" data-a="wa">↗ WhatsApp</button><button class="docbtn" data-a="copy">⧉ Copy</button><button class="docbtn" data-a="html">⬇ HTML</button><button class="docbtn" data-f="docx">⬇ Word</button><button class="docbtn" data-f="pdf">⬇ PDF</button>'; row.querySelectorAll('.docbtn').forEach(b=>b.addEventListener('click',()=>{ if(b.dataset.a==='copy')copyText(extractSendable(text),b); else if(b.dataset.a==='html')downloadHtml(disp); else if(b.dataset.a==='wa'){ const s=parseSend(text); sendWhatsApp(s.body, s.to); } else downloadDoc(disp,b.dataset.f); })); el.appendChild(row); }
     convo.appendChild(el); convo.scrollTop=convo.scrollHeight; return el.querySelector('.bubble'); }
 
   async function downloadDoc(text, format){
@@ -533,8 +566,9 @@
 
   // copy reply text to clipboard, with brief feedback on the button
   // open WhatsApp with the drafted text pre-filled; you pick the contact and send
-  function sendWhatsApp(text){
-    const url='https://wa.me/?text='+encodeURIComponent(text);
+  function sendWhatsApp(text, to){
+    const num=(to||'').replace(/[^\d]/g,'');
+    const url = num ? ('https://wa.me/'+num+'?text='+encodeURIComponent(text)) : ('https://wa.me/?text='+encodeURIComponent(text));
     window.open(url,'_blank');
   }
 
@@ -591,7 +625,50 @@
     const vs2=$('voiceSelect'); if(vs2) vs2.addEventListener('change',(e)=>{ voiceName=e.target.value; localStorage.setItem('nova_voice',voiceName); pickVoice(); });
     const vr=$('voiceRate'); if(vr) vr.addEventListener('input',(e)=>{ voiceRate=parseFloat(e.target.value)||1.02; const rv=$('rateVal'); if(rv) rv.textContent=voiceRate.toFixed(2)+'×'; localStorage.setItem('nova_rate',String(voiceRate)); });
     const vt=$('voiceTest'); if(vt) vt.addEventListener('click',()=>{ speak("Hi, I'm Nova. This is how I sound — you can change my voice and speed right here."); });
+    const bt=$('briefToggle'); if(bt){ bt.checked = localStorage.getItem('nova_brief')!=='off'; bt.addEventListener('change',()=>{ localStorage.setItem('nova_brief', bt.checked?'on':'off'); }); }
   }
+
+  // ---- contacts ----
+  const peopleBtn=$('peopleBtn'), peopleModal=$('peopleModal'), contactList=$('contactList');
+  async function refreshContacts(){
+    try{ const r=await api('/api/contacts'); const j=await r.json(); const list=j.contacts||[];
+      if(!list.length){ contactList.innerHTML='<div class="contact-empty">No people yet. Add someone above.</div>'; return; }
+      contactList.innerHTML='';
+      list.forEach(c=>{ const row=document.createElement('div'); row.className='contact-item';
+        const meta=[c.email,c.phone].filter(Boolean).join('  ·  ');
+        row.innerHTML='<div><div class="ci-name"></div><div class="ci-meta"></div></div><button class="ci-del" title="Remove">×</button>';
+        row.querySelector('.ci-name').textContent=c.name; row.querySelector('.ci-meta').textContent=meta;
+        row.querySelector('.ci-del').addEventListener('click',async()=>{ await api('/api/contacts/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:c.id})}); refreshContacts(); });
+        contactList.appendChild(row); });
+    }catch(_){}
+  }
+  async function addContact(){
+    const name=$('cName').value.trim(); if(!name) return;
+    const email=$('cEmail').value.trim(), phone=$('cPhone').value.trim();
+    $('cName').value=''; $('cEmail').value=''; $('cPhone').value='';
+    try{ await api('/api/contacts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,email,phone})}); refreshContacts(); }catch(_){}
+    $('cName').focus();
+  }
+  if(peopleBtn){
+    peopleBtn.addEventListener('click',()=>{ refreshContacts(); peopleModal.classList.add('open'); });
+    $('peopleClose').addEventListener('click',()=>peopleModal.classList.remove('open'));
+    $('cAdd').addEventListener('click',addContact);
+    $('cPhone').addEventListener('keydown',e=>{ if(e.key==='Enter') addContact(); });
+  }
+
+  // ---- morning briefing ----
+  async function maybeMorningBriefing(){
+    if(localStorage.getItem('nova_brief')==='off') return;
+    const today=new Date().toLocaleDateString('en-CA');
+    if(localStorage.getItem('nova_briefed')===today) return;
+    const hr=new Date().getHours();
+    if(hr<4 || hr>=11) return;            // only in the morning
+    try{
+      const r=await api('/api/briefing'); const j=await r.json();
+      if(j && j.text){ localStorage.setItem('nova_briefed',today); addMay(j.text, Date.now()); try{ speak(j.text); }catch(_){} }
+    }catch(_){}
+  }
+  setTimeout(maybeMorningBriefing, 1200);
 
   // ---- ask ----
   async function ask(userText){
