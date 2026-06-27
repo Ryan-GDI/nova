@@ -249,6 +249,22 @@ async function saveTasks(list) {
   }
   return tasksCache;
 }
+
+// ---- Contacts (people Nova knows: name -> email / phone) ----
+const CONTACTS_KEY = process.env.NOVA_CONTACTS_KEY || "nova_contacts";
+let contactsCache = [];
+async function loadContacts() {
+  if (UPSTASH_URL && UPSTASH_TOKEN) {
+    try { const j = await upstash(["GET", CONTACTS_KEY]); if (typeof j?.result === "string" && j.result) contactsCache = JSON.parse(j.result); } catch (_) {}
+  }
+  return Array.isArray(contactsCache) ? contactsCache : [];
+}
+async function saveContacts(list) {
+  contactsCache = Array.isArray(list) ? list : [];
+  if (UPSTASH_URL && UPSTASH_TOKEN) { try { await upstash(["SET", CONTACTS_KEY, JSON.stringify(contactsCache)]); } catch (_) {} }
+  return contactsCache;
+}
+function normPhone(p) { return (p || "").toString().replace(/[^\d+]/g, ""); }
 // A task: { id, text, daily:boolean, doneDate:"YYYY-MM-DD"|null }
 // Daily tasks count as "done" only if completed today; otherwise they're due again.
 function withStatus(t) {
@@ -365,6 +381,15 @@ async function generateReply(messages) {
       system += "\n\nTODAY'S CHECKLIST (" + todayStr() + "). If the user asks what's due/outstanding/left, tell them from this list, naturally and briefly.";
       system += "\nSTILL DUE:\n" + (due.length ? due.join("\n") : "(nothing — all done!)");
       if (done.length) system += "\nDONE TODAY:\n" + done.join("\n");
+    }
+  } catch (_) {}
+
+  try {
+    const contacts = await loadContacts();
+    if (contacts.length) {
+      const lines = contacts.map(c => "- " + c.name + (c.email ? " <" + c.email + ">" : "") + (c.phone ? " tel:" + c.phone : ""));
+      system += "\n\nSAVED CONTACTS (the user's people). When they refer to someone by name, use the matching details:\n" + lines.join("\n");
+      system += "\nFor a calendar invite, pass the contact's email as the attendee. For a WhatsApp message to a saved contact who has a phone number, wrap the draft as [[SEND to=THEIR_NUMBER]]message[[/SEND]] so it opens straight to them. If the named person isn't in this list, ask for their email or number.";
     }
   } catch (_) {}
 
@@ -545,6 +570,31 @@ app.get("/api/tasks", guard, async (_req, res) => {
   const list = await loadTasks();
   res.json({ tasks: list.map(withStatus), today: todayStr() });
 });
+
+// ---- Contacts endpoints ----
+app.get("/api/contacts", guard, async (_req, res) => {
+  res.json({ contacts: await loadContacts() });
+});
+app.post("/api/contacts", guard, async (req, res) => {
+  const name = (req.body?.name || "").toString().trim();
+  if (!name) return res.status(400).json({ error: "Name is required." });
+  const email = (req.body?.email || "").toString().trim();
+  const phone = normPhone(req.body?.phone);
+  const list = await loadContacts();
+  const id = (req.body?.id || "").toString();
+  const existing = id ? list.find(c => c.id === id) : list.find(c => c.name.toLowerCase() === name.toLowerCase());
+  if (existing) { existing.name = name; existing.email = email; existing.phone = phone; }
+  else list.push({ id: "c" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name, email, phone });
+  await saveContacts(list);
+  res.json({ contacts: list });
+});
+app.post("/api/contacts/delete", guard, async (req, res) => {
+  const id = (req.body?.id || "").toString();
+  let list = await loadContacts();
+  list = list.filter(c => c.id !== id);
+  await saveContacts(list);
+  res.json({ contacts: list });
+});
 app.post("/api/tasks", guard, async (req, res) => {
   const text = (req.body?.text || "").toString().trim();
   if (!text) return res.status(400).json({ error: "Empty task." });
@@ -675,12 +725,10 @@ app.post("/api/push/test", guard, async (_req, res) => {
 
 // The pinger calls this every few minutes. It nudges any task that's due and not done,
 // re-nudging every ~10 minutes until completed. Token via ?key= so a cron service can call it.
-app.get("/api/push/check", async (req, res) => {
-  if (PASSCODE && (req.query.key || "") !== PASSCODE) return res.status(401).json({ error: "Add ?key=PASSCODE" });
-  if (!PUSH_ON) return res.json({ ok: false, error: "push off" });
+async function runPushCheck() {
+  if (!PUSH_ON) return { ok: false, error: "push off" };
   const now = new Date();
   const todJ = todayStr();
-  // current Johannesburg wall-clock minutes
   const hm = now.toLocaleTimeString("en-GB", { timeZone: "Africa/Johannesburg", hour: "2-digit", minute: "2-digit" });
   const list = await loadTasks();
   let nudged = 0, changed = false;
@@ -688,7 +736,6 @@ app.get("/api/push/check", async (req, res) => {
     if (!t.due) continue;
     const isDone = t.daily ? t.doneDate === todJ : !!t.doneDate;
     if (isDone) continue;
-    // figure out the task's due time-of-day and whether it's reached
     let dueHM = null, dueDate = null;
     if (t.daily) { dueHM = t.due; dueDate = todJ; }
     else { const [d, tm] = (t.due || "").split("T"); dueDate = d; dueHM = tm; }
@@ -701,7 +748,12 @@ app.get("/api/push/check", async (req, res) => {
     t.lastNudge = now.getTime(); changed = true; nudged++;
   }
   if (changed) await saveTasks(list);
-  res.json({ ok: true, nudged, time: hm });
+  return { ok: true, nudged, time: hm };
+}
+
+app.get("/api/push/check", async (req, res) => {
+  if (PASSCODE && (req.query.key || "") !== PASSCODE) return res.status(401).json({ error: "Add ?key=PASSCODE" });
+  res.json(await runPushCheck());
 });
 
 // ---- Google Calendar integration ----
@@ -806,5 +858,58 @@ app.post("/api/calendar/add", guard, async (req, res) => {
   res.json(await createCalendarEvent(req.body || {}));
 });
 
+// List today's Google Calendar events (Johannesburg day), for the morning briefing.
+async function listTodaysEvents() {
+  const token = await googleAccessToken();
+  if (!token) return null;
+  const day = todayStr(); // YYYY-MM-DD
+  const timeMin = encodeURIComponent(day + "T00:00:00+02:00");
+  const timeMax = encodeURIComponent(day + "T23:59:59+02:00");
+  const url = G_API + "/calendar/v3/calendars/primary/events?singleEvents=true&orderBy=startTime&timeMin=" + timeMin + "&timeMax=" + timeMax;
+  try {
+    const r = await fetch(url, { headers: { authorization: "Bearer " + token } });
+    const j = await r.json();
+    if (!Array.isArray(j.items)) return [];
+    return j.items.map(e => {
+      const start = e.start?.dateTime || e.start?.date || "";
+      let t = "";
+      if (e.start?.dateTime) { try { t = new Date(e.start.dateTime).toLocaleTimeString("en-GB", { timeZone: TZONE, hour: "2-digit", minute: "2-digit" }); } catch (_) {} }
+      return { time: t, title: e.summary || "(untitled)" };
+    });
+  } catch (_) { return []; }
+}
+
+// Morning briefing: today's tasks + today's calendar, as a short spoken-style greeting.
+app.get("/api/briefing", guard, async (_req, res) => {
+  const todayJ = todayStr();
+  const weekday = new Date(todayJ + "T12:00:00").toLocaleDateString("en-GB", { weekday: "long" });
+  const tasks = (await loadTasks()).map(withStatus).filter(t => !t.done);
+  const events = await listTodaysEvents(); // null if calendar not connected
+  const brandName = process.env.NOVA_OWNER_NAME || "";
+  let parts = [];
+  parts.push("Good morning" + (brandName ? ", " + brandName : "") + ". It's " + weekday + ".");
+  if (events && events.length) {
+    const evText = events.map(e => (e.time ? e.time + " " : "") + e.title).join("; ");
+    parts.push("On your calendar today: " + evText + ".");
+  } else if (events && events.length === 0) {
+    parts.push("Your calendar is clear today.");
+  }
+  if (tasks.length) {
+    const tText = tasks.map(t => t.text + (t.due ? " at " + (t.daily ? t.due : (t.due.split("T")[1] || "")) : "")).join("; ");
+    parts.push("You have " + tasks.length + " task" + (tasks.length > 1 ? "s" : "") + ": " + tText + ".");
+  } else {
+    parts.push("No tasks on your checklist yet.");
+  }
+  parts.push("Have a great day.");
+  res.json({ text: parts.join(" "), weekday, date: todayJ, taskCount: tasks.length, eventCount: events ? events.length : null });
+});
+
 const PORT = process.env.PORT || 3000;
+// When the server is always-on, nudge reminders on its own — no external pinger needed.
+if (PUSH_ON) {
+  const everyMs = parseInt(process.env.NOVA_PUSH_INTERVAL_MS || "120000", 10); // every 2 minutes
+  setInterval(() => { runPushCheck().catch(() => {}); }, everyMs);
+  console.log("Internal reminder scheduler on (every " + Math.round(everyMs / 1000) + "s)");
+}
+
 app.listen(PORT, () => console.log(`Nova is listening on http://localhost:${PORT}`));
